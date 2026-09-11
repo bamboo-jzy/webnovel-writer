@@ -15,16 +15,66 @@
 
 ### `/webnovel-plan [卷号]`
 
-生成卷级规划与章节大纲。
+只生成卷级规划：卷节拍表、卷时间线和纯卷级详细大纲，并增量写回设定与总纲。它不会生成逐章章纲或章级 Story System 合同。
 
 ```bash
 /webnovel-plan 1
-/webnovel-plan 2-3
+/webnovel-plan 2
 ```
 
-### `/webnovel-write [章号]`
+### `/webnovel-chapter-plan [卷号] [章节范围]`
 
-执行完整章节创作流程（`context-agent` 先 research 并生成写作任务书 → 按任务书起草正文 → 审查 → 润色 → 数据落盘）。
+读取已完成的卷级规划，按 8-12 章批次生成独立章纲，校验 CBN → CPNs → CEN、相邻章承接、时间锚点与伏笔推进，并刷新每章的 Story System 合同。
+
+```bash
+/webnovel-chapter-plan 1
+/webnovel-chapter-plan 1 1-10
+/webnovel-chapter-plan 1 11-20
+```
+
+已有且非空的独立章纲视为作者资产，不会被自动覆盖；失败时只重做当前批次。
+
+### `/webnovel-volume-revise [卷号] [修改诉求]`
+
+以确认式流程修改已有卷纲。Skill 会先读取三份卷级文件、总纲、设定和状态，展示保留项、修改项及影响章节；只有作者确认后才定向编辑。修改前会备份卷纲和状态，修改后校验并刷新 revision，不会自动覆盖独立章纲或章级合同。
+
+```bash
+/webnovel-volume-revise 1
+/webnovel-volume-revise 1 调整卷末反派身份，但保留前半卷节奏
+```
+
+### `/webnovel-volume-reload [卷号]`
+
+人工编辑 `大纲/第N卷-节拍表.md`、`大纲/第N卷-时间线.md` 或 `大纲/第N卷-详细大纲.md` 后，必须显式重载。系统按三份文件内容计算 SHA-256 revision；revision 变化时，将依赖旧 revision 的 `chapters_planned` 标记为 `stale`，保留原有章纲文件不覆盖。
+
+```bash
+/webnovel-volume-reload 1
+```
+
+受影响章节需重新运行 `/webnovel-chapter-plan`，在章纲和章级合同刷新前，`/webnovel-write` 的写前门禁会阻断过期章节。
+
+### `/webnovel-chapter-reload [章号]`
+
+正文经过作者人工修改后，必须显式重载当前内容 revision。系统按正文字节计算 SHA-256，先预览并备份，再绑定新的 `validation_input`；reviewer 和 data-agent 重新读取当前正文后，使用 `--validate` 检查四份 artifacts 是否与同一版本匹配。重载、校验和提交是三个独立阶段，不会覆盖正文、章纲或合同。
+
+```bash
+/webnovel-chapter-reload 12
+```
+
+底层 CLI 支持：
+
+```bash
+python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" \
+  --project-root "${PROJECT_ROOT}" chapter-reload --chapter 12 --dry-run --format json
+python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" \
+  --project-root "${PROJECT_ROOT}" chapter-reload --chapter 12 --backup-only --format json
+python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" \
+  --project-root "${PROJECT_ROOT}" chapter-reload --chapter 12 --validate --format json
+```
+
+正文 revision 变化会将后续已有规划、合同或正文的依赖标为 `previous_chapter_revision_changed`；系统不会自动改写下游文件。若重新提取的事实与旧 accepted commit 不一致而投影链无法安全撤销旧事实，提交会以 `revision_projection_unsafe` 阻断，并保留旧提交和新校验结果。
+
+### `/webnovel-write [章号]`（`context-agent` 先 research 并生成写作任务书 → 按任务书起草正文 → 审查 → 润色 → 数据落盘）。
 
 ```bash
 /webnovel-write 1
@@ -97,7 +147,7 @@ python -X utf8 "<CLAUDE_PLUGIN_ROOT>/scripts/webnovel.py" --project-root "<PROJE
 
 ### 作者友好运行体验
 
-`/webnovel-init`、`/webnovel-plan`、`/webnovel-write` 和 `/webnovel-review` 结束时都会输出统一最终报告。报告不直接输出原始 JSON、traceback 或长命令日志，而是先给一句总状态，再分三段说明：产生的文件与完成情况、过程中遇到的问题与异常耗时、下一步建议。
+`/webnovel-init`、`/webnovel-plan`、`/webnovel-chapter-plan`、`/webnovel-write` 和 `/webnovel-review` 结束时都会输出统一最终报告。报告不直接输出原始 JSON、traceback 或长命令日志，而是先给一句总状态，再分三段说明：产生的文件与完成情况、过程中遇到的问题与异常耗时、下一步建议。
 
 总状态有四种：
 

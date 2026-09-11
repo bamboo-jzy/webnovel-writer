@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -96,6 +97,67 @@ def _find_volume_outline_file(project_root: Path, chapter_num: int) -> Path | No
         outline_dir / f"第{volume_num}卷 详细大纲.md",
     ]
     return next((path for path in candidates if path.exists()), None)
+
+
+def find_chapter_outline_file(project_root: Path, chapter_num: int) -> tuple[Path | None, str]:
+    """Return the selected chapter outline and whether it is split or legacy."""
+    outline_dir = project_root / "大纲"
+    split_outline = _find_split_outline_file(outline_dir, chapter_num)
+    if split_outline is not None:
+        return split_outline, "split"
+
+    volume_outline = _find_volume_outline_file(project_root, chapter_num)
+    if volume_outline is None:
+        return None, "missing"
+    section = _extract_outline_section(volume_outline.read_text(encoding="utf-8"), chapter_num)
+    if section is None:
+        return None, "missing"
+    return volume_outline, "legacy_volume"
+
+
+def chapter_outline_revision(project_root: Path, chapter_num: int) -> str:
+    path, _ = find_chapter_outline_file(project_root, chapter_num)
+    if path is None or not path.is_file():
+        return ""
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+
+
+def chapter_planned_source_revision(project_root: Path, chapter_num: int) -> str:
+    state_path = project_root / ".webnovel" / "state.json"
+    if not state_path.is_file():
+        return ""
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return ""
+    progress = state.get("progress") if isinstance(state, dict) else None
+    planned = progress.get("chapters_planned") if isinstance(progress, dict) else None
+    if not isinstance(planned, list):
+        return ""
+    for item in planned:
+        if isinstance(item, dict) and item.get("chapter") == int(chapter_num):
+            return str(item.get("source_volume_revision") or "").strip()
+    return ""
+
+
+def volume_planning_revision(project_root: Path, volume: int) -> str:
+    files = (
+        project_root / "大纲" / f"第{volume}卷-节拍表.md",
+        project_root / "大纲" / f"第{volume}卷-时间线.md",
+        project_root / "大纲" / f"第{volume}卷-详细大纲.md",
+    )
+    if any(not path.is_file() for path in files):
+        return ""
+    digest = hashlib.sha256()
+    for path in files:
+        data = path.read_bytes()
+        if not data.strip():
+            return ""
+        digest.update(path.name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(data)
+        digest.update(b"\0")
+    return digest.hexdigest()[:16]
 
 
 def _extract_outline_section(content: str, chapter_num: int) -> str | None:

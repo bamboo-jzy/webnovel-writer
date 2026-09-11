@@ -9,6 +9,8 @@ import pytest
 from data_modules.chapter_commit_service import ChapterCommitService
 from data_modules.config import DataModulesConfig
 from data_modules.index_manager import IndexManager
+from .test_chapter_reloading import install_projection_fixture, prepare_inputs
+from data_modules.chapter_reloading import validate_chapter_body
 
 
 def test_commit_service_rejects_when_missed_nodes_exist(tmp_path):

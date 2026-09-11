@@ -303,6 +303,34 @@ def cmd_user_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_chapter_reload(args: argparse.Namespace) -> int:
+    from .chapter_reloading import format_chapter_reload_report, reload_chapter_body, validate_chapter_body
+
+    root = _resolve_root(args.project_root)
+    if args.validate:
+        report = validate_chapter_body(root, args.chapter, dry_run=args.dry_run)
+    else:
+        report = reload_chapter_body(root, args.chapter, source=args.source, dry_run=args.dry_run, backup_only=args.backup_only)
+    print(format_chapter_reload_report(report, args.format))
+    return 0 if report.get("ok") else 1
+
+
+def cmd_volume_reload(args: argparse.Namespace) -> int:
+    from .volume_planning import format_volume_reload_report, reload_volume_plan
+
+    root = _resolve_root(args.project_root)
+    report = reload_volume_plan(
+        root,
+        args.volume,
+        chapters_range=args.chapters_range,
+        source=args.source,
+        dry_run=bool(args.dry_run),
+        backup_only=bool(args.backup_only),
+    )
+    print(format_volume_reload_report(report, args.format))
+    return 0 if report.get("ok") else 1
+
+
 def cmd_run_ledger(args: argparse.Namespace) -> int:
     from .run_ledger import (
         build_write_resume_plan,
@@ -460,11 +488,30 @@ def main() -> None:
     p_projection_replay.set_defaults(func=cmd_projections)
 
     p_user_report = sub.add_parser("user-report", help="渲染作者友好的最终报告")
-    p_user_report.add_argument("--stage", choices=["init", "plan", "write", "review"], required=True, help="报告阶段")
+    p_user_report.add_argument("--stage", choices=["init", "plan", "chapter-plan", "write", "review"], required=True, help="报告阶段")
     p_user_report.add_argument("--chapter", type=int, default=None, help="目标章节号")
     p_user_report.add_argument("--volume", type=int, default=None, help="目标卷号")
     p_user_report.add_argument("--format", choices=["text", "json"], default="text", help="输出格式")
     p_user_report.set_defaults(func=cmd_user_report)
+
+    p_chapter_reload = sub.add_parser("chapter-reload", help="重载人工正文并校验当前版本 artifacts")
+    p_chapter_reload.add_argument("--chapter", type=int, required=True)
+    p_chapter_reload.add_argument("--source", choices=["manual_reload", "generated_draft"], default="manual_reload")
+    p_chapter_reload.add_argument("--dry-run", action="store_true")
+    reload_mode = p_chapter_reload.add_mutually_exclusive_group()
+    reload_mode.add_argument("--backup-only", action="store_true")
+    reload_mode.add_argument("--validate", action="store_true")
+    p_chapter_reload.add_argument("--format", choices=["json", "text"], default="text")
+    p_chapter_reload.set_defaults(func=cmd_chapter_reload)
+
+    p_volume_reload = sub.add_parser("volume-reload", help="重载卷纲 revision 并标记下游章纲过期")
+    p_volume_reload.add_argument("--volume", type=int, required=True, help="目标卷号")
+    p_volume_reload.add_argument("--chapters-range", default="", help="章节范围（首次登记时可提供）")
+    p_volume_reload.add_argument("--source", default="manual_reload", help="重载来源")
+    p_volume_reload.add_argument("--dry-run", action="store_true", help="只检查和预览，不写入状态")
+    p_volume_reload.add_argument("--backup-only", action="store_true", help="只备份当前卷纲文件，不更新状态")
+    p_volume_reload.add_argument("--format", choices=["json", "text"], default="text", help="输出格式")
+    p_volume_reload.set_defaults(func=cmd_volume_reload)
 
     p_run_ledger = sub.add_parser("run-ledger", help="记录或查询写章断点续跑状态")
     run_ledger_sub = p_run_ledger.add_subparsers(dest="ledger_action", required=True)

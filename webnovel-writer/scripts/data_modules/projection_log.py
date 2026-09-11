@@ -58,6 +58,8 @@ def build_projection_run(
         "commit_path": str(commit_path or ""),
         "commit_hash": commit_hash(commit_payload),
         "commit_status": str((meta or {}).get("status") or ""),
+        "content_revision": str((meta or {}).get("content_revision") or ""),
+        "revision_number": (meta or {}).get("revision_number", 0),
         "status": _overall_status(writers),
         "writers": writers,
         "projection_status": dict(commit_payload.get("projection_status") or {}),

@@ -40,6 +40,9 @@ def run_postcommit_gate(project_root: Path, chapter: int) -> dict:
     snapshot = resolve_project_phase(project_root, chapter=chapter)
     errors: list[dict] = []
     warnings: list[dict] = []
+    if snapshot.body_revision_stale or snapshot.body_revision_uncommitted or snapshot.upstream_body_stale or snapshot.body_evidence.get("dependency_stale"):
+        affected = snapshot.upstream_body_stale[0] if snapshot.upstream_body_stale else chapter
+        errors.append(issue("chapter_body_stale", message="当前正文与可信提交链不一致", repair=f"运行 /webnovel-chapter-reload {affected}"))
     commit_path = _commit_path(project_root, chapter)
     commit_report = validate_chapter_commit(commit_path)
 

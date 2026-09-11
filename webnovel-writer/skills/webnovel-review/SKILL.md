@@ -32,9 +32,15 @@ export PROJECT_ROOT="$(python "${SCRIPTS_DIR}/webnovel.py" --project-root "${WOR
 
 `PROJECT_ROOT` 必须包含 `.webnovel/state.json`，否则阻断。
 
-### Step 2：目标章缺合同时刷新 runtime 合同
+### Step 2：确认章纲并处理缺失合同
 
-目标章缺 runtime 合同时，先用详细大纲的真实本章目标刷新（`CHAPTER_GOAL` 禁止 `{章纲目标}` / `第N章章纲目标` 占位文本）：
+审查前必须读取目标章的真实章纲。优先使用非空的 `大纲/第{chapter_num}章-*.md`；旧项目才允许由 `chapter_outline_loader.py` 从卷级详细大纲读取对应章节段落作为 fallback。纯卷纲没有章级目标时不能自由推断，必须阻断并提示：
+
+```text
+第 12 章尚未完成章纲规划，请先运行 `/webnovel-chapter-plan 1 12`。
+```
+
+若章纲文件存在但章级合同缺失，才从该章纲的执行指令解析真实 `CHAPTER_GOAL` 并刷新 runtime 合同。禁止使用 `{章纲目标}`、`第N章章纲目标` 占位文本，也不得从卷纲摘要、正文摘要或 `dynamic_context` 猜测目标：
 
 ```bash
 GENRE="$(python -X utf8 -c "import json; s=json.load(open('${PROJECT_ROOT}/.webnovel/state.json',encoding='utf-8')); pi=s.get('project_info',{}); print(pi.get('genre') or s.get('project',{}).get('genre',''))")"
@@ -42,6 +48,8 @@ GENRE="$(python -X utf8 -c "import json; s=json.load(open('${PROJECT_ROOT}/.webn
 python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" \
   story-system "${CHAPTER_GOAL}" --genre "${GENRE}" --chapter {chapter_num} --persist --emit-runtime-contracts --format both
 ```
+
+章纲晚于现有合同表示合同过期；先刷新合同，不得直接开始审查。若仅有卷级规划产物而无章纲，不得用卷纲回退。
 
 ### Step 3：按需加载参考
 

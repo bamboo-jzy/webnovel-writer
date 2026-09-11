@@ -155,6 +155,8 @@ def build_review_artifacts(
     anti_patterns_added = append_ai_flavor_anti_patterns(project_root, result)
     metrics = result.to_metrics_dict(report_file=report_file)
     normalized_review = result.to_dict()
+    if isinstance(raw, dict) and "source" in raw:
+        normalized_review["source"] = raw["source"]
     review_results_path.parent.mkdir(parents=True, exist_ok=True)
     review_results_path.write_text(
         json.dumps(normalized_review, ensure_ascii=False, indent=2),

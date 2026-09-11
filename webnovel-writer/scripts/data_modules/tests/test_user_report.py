@@ -16,6 +16,7 @@ def _ensure_scripts_on_path() -> None:
 _ensure_scripts_on_path()
 
 from data_modules.projection_log import append_projection_run  # noqa: E402
+from data_modules.chapter_reloading import chapter_body_revision  # noqa: E402
 from data_modules.user_report import build_user_report, render_user_report_text  # noqa: E402
 
 
@@ -122,6 +123,7 @@ def _commit_payload(*, chapter: int = 1, status: str = "accepted", projection_st
 def _write_commit(project_root: Path, payload: dict) -> Path:
     chapter = int(payload["meta"]["chapter"])
     path = project_root / ".story-system" / "commits" / f"chapter_{chapter:03d}.commit.json"
+    payload["meta"]["content_revision"] = chapter_body_revision(project_root, chapter)
     _write_json(path, payload)
     return path
 

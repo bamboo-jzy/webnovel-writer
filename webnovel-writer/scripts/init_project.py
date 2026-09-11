@@ -169,6 +169,7 @@ def _ensure_state_schema(state: Dict[str, Any]) -> Dict[str, Any]:
     state["progress"].setdefault("volumes_completed", [])
     state["progress"].setdefault("current_volume", 1)
     state["progress"].setdefault("volumes_planned", [])
+    state["progress"].setdefault("chapters_planned", [])
 
     # protagonist schema evolution
     ps = state["protagonist_state"]
@@ -186,7 +187,7 @@ def _build_master_outline(target_chapters: int, *, chapters_per_volume: int = 50
     lines: list[str] = [
         "# 总纲",
         "",
-        "> 本文件为“总纲骨架”，用于 /webnovel-plan 细化为卷大纲与章纲。",
+        "> 本文件为“总纲骨架”，用于 /webnovel-plan 细化为卷纲；章纲由 /webnovel-chapter-plan 基于卷纲继续拆分。",
         "",
         "## 卷结构",
         "",

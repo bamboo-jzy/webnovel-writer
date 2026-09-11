@@ -16,6 +16,7 @@ def _ensure_scripts_on_path() -> None:
 _ensure_scripts_on_path()
 
 from data_modules.run_ledger import build_write_resume_plan, record_write_step  # noqa: E402
+from data_modules.chapter_reloading import chapter_body_revision  # noqa: E402
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -30,9 +31,9 @@ def _make_project(project_root: Path) -> None:
     _write_json(project_root / ".webnovel" / "state.json", {"project_info": {"title": "测试书"}, "progress": {}})
 
 
-def _commit_payload(status: str = "accepted") -> dict:
+def _commit_payload(status: str = "accepted", *, content_revision: str = "") -> dict:
     return {
-        "meta": {"chapter": 1, "status": status},
+        "meta": {"chapter": 1, "status": status, "content_revision": content_revision},
         "projection_status": {
             "state": "done",
             "index": "skipped",
@@ -106,7 +107,7 @@ def test_write_resume_retries_backup_after_commit_done(tmp_path: Path) -> None:
     chapter_file = tmp_path / "正文" / "第0001章.md"
     chapter_file.write_text("正文\n", encoding="utf-8")
     record_write_step(tmp_path, chapter=1, step="draft", status="completed", outputs={"chapter_file": chapter_file})
-    _write_json(tmp_path / ".story-system" / "commits" / "chapter_001.commit.json", _commit_payload("accepted"))
+    _write_json(tmp_path / ".story-system" / "commits" / "chapter_001.commit.json", _commit_payload("accepted", content_revision=chapter_body_revision(tmp_path, 1)))
 
     plan = build_write_resume_plan(tmp_path, chapter=1)
 
@@ -160,7 +161,7 @@ def test_write_resume_reruns_commit_after_rejected_commit(tmp_path: Path) -> Non
             "extraction_result": extraction_path,
         },
     )
-    _write_json(tmp_path / ".story-system" / "commits" / "chapter_001.commit.json", _commit_payload("rejected"))
+    _write_json(tmp_path / ".story-system" / "commits" / "chapter_001.commit.json", _commit_payload("rejected", content_revision=chapter_body_revision(tmp_path, 1)))
 
     plan = build_write_resume_plan(tmp_path, chapter=1)
 

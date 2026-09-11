@@ -36,6 +36,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" ind
 - `chapter_file`：正文文件路径
 - `project_root`：项目根目录
 - `scripts_dir`：脚本目录
+- `validation_input`：提交或正文重载流程传入的章号、正文 SHA-256、合同 SHA-256 与 validation_id。开始前读取并核对正文版本，返回前再次核对；若变化立即阻断，不返回通过结果。输出 JSON 顶层 `source` 原样携带本次 validation_input，不得读取旧结果后补盖新版本。历史章修订以该章之前的 accepted commits 为事实依据，当前聚合 state/index 可能含本章旧事实及后续事实，不能据此反推当时状态。
 
 ## 4. 执行流程（按顺序执行）
 

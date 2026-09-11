@@ -15,7 +15,11 @@ from .config import DataModulesConfig
 from .project_phase import (
     INIT_REQUIRED_DIRS,
     INIT_REQUIRED_FILES,
+    PHASE_CHAPTER_CONTRACT_READY,
+    PHASE_DRAFT_IN_PROGRESS,
     PHASE_INIT_READY,
+    PHASE_READY_TO_COMMIT,
+    PHASE_CHAPTER_COMMITTED,
     PHASE_INIT_SCAFFOLDED,
     PHASE_NO_PROJECT,
     ProjectPhaseSnapshot,
@@ -36,6 +40,25 @@ CHECK_OK = "ok"
 CHECK_WARNING = "warning"
 CHECK_ERROR = "error"
 CHECK_SKIPPED = "skipped"
+
+CONTRACT_REQUIRED_PHASES = {
+    PHASE_CHAPTER_CONTRACT_READY,
+    PHASE_DRAFT_IN_PROGRESS,
+    PHASE_READY_TO_COMMIT,
+    PHASE_CHAPTER_COMMITTED,
+    "projection_failed",
+}
+
+
+def _contract_checks_required(snapshot: ProjectPhaseSnapshot) -> bool:
+    if snapshot.phase in CONTRACT_REQUIRED_PHASES:
+        return True
+    if snapshot.target_chapter <= 0 or not snapshot.project_root:
+        return False
+    chapter_contract = contract_files_for_chapter(
+        Path(snapshot.project_root), snapshot.target_chapter
+    )["chapter"]
+    return chapter_contract.is_file()
 
 
 def _check(
@@ -87,9 +110,9 @@ def _read_json(path: Path) -> tuple[dict[str, Any], str]:
 def _expected_profile(snapshot: ProjectPhaseSnapshot) -> dict[str, Any]:
     expected_files = list(INIT_REQUIRED_FILES)
     expected_dirs = list(INIT_REQUIRED_DIRS)
-    if snapshot.phase not in {PHASE_NO_PROJECT, PHASE_INIT_SCAFFOLDED, PHASE_INIT_READY}:
+    if _contract_checks_required(snapshot):
         expected_files.extend(snapshot.missing_contract_files)
-    if snapshot.target_chapter > 0 and snapshot.phase not in {PHASE_NO_PROJECT, PHASE_INIT_SCAFFOLDED, PHASE_INIT_READY}:
+    if snapshot.target_chapter > 0 and _contract_checks_required(snapshot):
         expected_files.extend(
             str(path.relative_to(Path(snapshot.project_root)))
             for path in contract_files_for_chapter(Path(snapshot.project_root), snapshot.target_chapter).values()
@@ -161,7 +184,27 @@ def _file_checks(project_root: Path, snapshot: ProjectPhaseSnapshot) -> list[dic
             )
         )
 
-    if snapshot.phase not in {PHASE_NO_PROJECT, PHASE_INIT_SCAFFOLDED, PHASE_INIT_READY} and snapshot.target_chapter > 0:
+    if snapshot.body_revision_stale or snapshot.body_revision_uncommitted or snapshot.upstream_body_stale or snapshot.body_evidence.get("dependency_stale"):
+        affected = snapshot.upstream_body_stale[0] if snapshot.upstream_body_stale else snapshot.target_chapter
+        checks.append(_check("chapter.body_revision_stale", status=CHECK_ERROR, severity="blocker", message="正文版本与可信提交链不一致", expected="validated and committed content revision", actual=str(snapshot.body_evidence), impact="旧审查和投影不能证明当前正文有效。", repair=f"运行 /webnovel-chapter-reload {affected}，校验成功后再确认提交。"))
+
+    if snapshot.volume_plan_stale:
+        volume = snapshot.target_volume or 1
+        checks.append(
+            _check(
+                "outline.volume_plan_stale",
+                status=CHECK_ERROR,
+                severity="blocker",
+                message=f"volume {volume} plan revision is stale for chapter {snapshot.target_chapter}",
+                path=str(project_root / "大纲"),
+                expected="chapter source_volume_revision matches current volume revision",
+                actual=snapshot.volume_planning_revision,
+                impact="当前章节依赖旧卷纲，继续写作会使用过期的卷级决策。",
+                repair=f"运行 /webnovel-volume-reload {volume}，再运行 /webnovel-chapter-plan {volume} {snapshot.target_chapter}。",
+            )
+        )
+
+    if _contract_checks_required(snapshot) and snapshot.target_chapter > 0:
         for name, path in contract_files_for_chapter(project_root, snapshot.target_chapter).items():
             exists = path.is_file()
             checks.append(

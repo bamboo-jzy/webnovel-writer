@@ -60,6 +60,64 @@ def run_prewrite_gate(project_root: Path, chapter: int) -> dict[str, Any]:
             )
         )
 
+    if snapshot.body_revision_stale or snapshot.body_revision_uncommitted or snapshot.upstream_body_stale or snapshot.body_evidence.get("dependency_stale"):
+        affected = snapshot.upstream_body_stale[0] if snapshot.upstream_body_stale else chapter
+        errors.append(issue("chapter_body_stale", message="正文或前置章节版本已变更，不得自动覆盖现有正文", repair=f"运行 /webnovel-chapter-reload {affected}", details=snapshot.body_evidence))
+
+    if snapshot.volume_plan_stale:
+        errors.append(
+            issue(
+                "volume_plan_stale",
+                message=f"第 {snapshot.target_volume or 1} 卷卷纲已修改，章纲和合同需要重载",
+                impact="当前章节记录依赖旧卷纲 revision，继续写作会使用过期的卷级决策。",
+                repair=f"先运行 /webnovel-volume-reload {snapshot.target_volume or 1}，再运行 /webnovel-chapter-plan {snapshot.target_volume or 1} {chapter}",
+                details={
+                    "volume": snapshot.target_volume,
+                    "volume_planning_revision": snapshot.volume_planning_revision,
+                    "chapter_outline_revision": snapshot.chapter_outline_revision,
+                },
+            )
+        )
+    elif "chapter_outline_missing_after_volume_plan" in snapshot.warnings:
+        errors.append(
+            issue(
+                "chapter_outline_missing",
+                message=f"第 {chapter} 章尚未完成章纲规划",
+                impact="卷纲不能替代章级执行约束，继续写作会缺少本章目标、节点和禁区。",
+                repair=f"先运行 /webnovel-chapter-plan {snapshot.target_volume or 1} {chapter}",
+                details={
+                    "chapter": chapter,
+                    "volume": snapshot.target_volume,
+                    "outline_source": snapshot.chapter_outline_source,
+                },
+            )
+        )
+    elif snapshot.chapter_outline_source == "legacy_volume":
+        warnings.append(
+            issue(
+                "legacy_chapter_outline_fallback",
+                message="使用卷级详细大纲中的旧章纲回退",
+                severity="warning",
+                impact="旧项目尚未迁移为独立章纲文件，章级约束来源较弱。",
+                repair=f"可运行 /webnovel-chapter-plan {snapshot.target_volume or 1} {chapter} 生成独立章纲。",
+                details={"outline_file": snapshot.chapter_outline_file},
+            )
+        )
+
+    if snapshot.chapter_contract_stale:
+        errors.append(
+            issue(
+                "chapter_contract_stale",
+                message=f"第 {chapter} 章章纲更新晚于 Story System 合同",
+                impact="合同不能证明它反映当前章纲，写作上下文可能已经过期。",
+                repair=f"先运行 /webnovel-chapter-plan {snapshot.target_volume or 1} {chapter} 刷新合同。",
+                details={
+                    "outline_file": snapshot.chapter_outline_file,
+                    "outline_revision": snapshot.chapter_outline_revision,
+                },
+            )
+        )
+
     runtime = load_runtime_sources(project_root, chapter)
     contracts = runtime.contracts
     story_contract = {

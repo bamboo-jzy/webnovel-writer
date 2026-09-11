@@ -24,6 +24,7 @@ def main() -> None:
     parser.add_argument("--fulfillment-result", required=True)
     parser.add_argument("--disambiguation-result", required=True)
     parser.add_argument("--extraction-result", required=True)
+    parser.add_argument("--expected-previous", default="", help="作者确认修订的上一 commit identity")
     args = parser.parse_args()
 
     service = ChapterCommitService(Path(args.project_root))
@@ -34,7 +35,7 @@ def main() -> None:
         disambiguation_result=_read_json(args.disambiguation_result),
         extraction_result=_read_json(args.extraction_result),
     )
-    service.persist_commit(payload)
+    service.persist_commit(payload, expected_previous=args.expected_previous)
     payload = service.apply_projections(payload)
     print(json.dumps(payload, ensure_ascii=False))
 

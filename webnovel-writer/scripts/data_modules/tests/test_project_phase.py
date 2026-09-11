@@ -62,6 +62,30 @@ def _make_contracts(project_root: Path, chapter: int = 1) -> None:
     )
 
 
+def test_project_phase_detects_stale_chapter_plan_after_volume_change(tmp_path):
+    _make_init_ready(tmp_path)
+    _make_contracts(tmp_path, chapter=1)
+    outline_dir = tmp_path / "大纲"
+    (outline_dir / "第1卷-节拍表.md").write_text("节拍\n", encoding="utf-8")
+    (outline_dir / "第1卷-时间线.md").write_text("时间线\n", encoding="utf-8")
+    (outline_dir / "第1卷-详细大纲.md").write_text("卷纲\n", encoding="utf-8")
+    state_path = tmp_path / ".webnovel" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["progress"]["volumes_planned"] = [
+        {"volume": 1, "chapters_range": "1-3", "planning_revision": "old"}
+    ]
+    state["progress"]["chapters_planned"] = [
+        {"chapter": 1, "volume": 1, "source_volume_revision": "old", "status": "ready"}
+    ]
+    state_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+    snapshot = resolve_project_phase(tmp_path, chapter=1)
+
+    assert snapshot.volume_plan_stale is True
+    assert snapshot.chapter_contract_stale is True
+    assert "chapter_plan_stale_after_volume_change" in snapshot.warnings
+
+
 def test_project_phase_reports_init_scaffolded_when_core_files_missing(tmp_path):
     _write_json(tmp_path / ".webnovel" / "state.json", {"project_info": {}, "progress": {}})
 

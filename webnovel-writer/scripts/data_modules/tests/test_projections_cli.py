@@ -14,6 +14,8 @@ def _ensure_scripts_on_path() -> None:
 
 _ensure_scripts_on_path()
 
+from .test_chapter_reloading import install_projection_fixture
+
 from data_modules.chapter_commit_service import ChapterCommitService  # noqa: E402
 from data_modules.projection_log import read_projection_runs  # noqa: E402
 from data_modules.projections import replay_projections, retry_projection  # noqa: E402
@@ -30,7 +32,7 @@ def _make_rejected_commit(project_root: Path, chapter: int) -> None:
         disambiguation_result={"pending": []},
         extraction_result={"state_deltas": [], "entity_deltas": [], "accepted_events": []},
     )
-    service.persist_commit(payload)
+    install_projection_fixture(project_root, payload)
 
 
 def _make_accepted_commit_with_event(project_root: Path, chapter: int) -> None:
@@ -56,7 +58,7 @@ def _make_accepted_commit_with_event(project_root: Path, chapter: int) -> None:
             ],
         },
     )
-    service.persist_commit(payload)
+    install_projection_fixture(project_root, payload)
 
 
 def test_retry_projection_replays_existing_commit(tmp_path):

@@ -5,6 +5,7 @@ import json
 import sqlite3
 
 from data_modules.chapter_commit_service import ChapterCommitService
+from .test_chapter_reloading import install_projection_fixture
 from data_modules.config import DataModulesConfig
 from data_modules.index_manager import IndexManager
 from data_modules.memory.store import ScratchpadManager
@@ -81,6 +82,7 @@ def test_accepted_chapter_commits_advance_progress_and_word_count(tmp_path):
             disambiguation_result={"pending": []},
             extraction_result={"state_deltas": [], "entity_deltas": [], "accepted_events": []},
         )
+        install_projection_fixture(tmp_path, payload)
         service.apply_projections(payload)
 
     state = json.loads((tmp_path / ".webnovel" / "state.json").read_text(encoding="utf-8"))
@@ -374,6 +376,7 @@ def test_accepted_commit_writes_chapter_index_tables(tmp_path):
         },
     )
 
+    install_projection_fixture(tmp_path, payload)
     result = service.apply_projections(payload)
     manager = IndexManager(cfg)
 

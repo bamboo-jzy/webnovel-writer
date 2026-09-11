@@ -72,8 +72,14 @@ else:
     from .review_author_view import build_review_author_view
 
 
+try:
+    from chapter_outline_loader import find_chapter_outline_file
+except ImportError:  # pragma: no cover
+    from scripts.chapter_outline_loader import find_chapter_outline_file
+
+
 SCHEMA_VERSION = "webnovel-user-report/v1"
-VALID_STAGES = ("init", "plan", "write", "review")
+VALID_STAGES = ("init", "plan", "chapter-plan", "write", "review")
 VALID_FORMATS = ("text", "json")
 
 STATUS_COMPLETED = "completed"
@@ -472,6 +478,22 @@ def _append_project_status_next_action(report: dict[str, Any], project_root: Pat
     except Exception:
         status = {}
     next_action = str(status.get("next_action") or "").strip()
+    evidence = status.get("evidence") if isinstance(status.get("evidence"), dict) else {}
+    if evidence.get("volume_plan_stale"):
+        volume = int(evidence.get("target_volume") or 1)
+        target_chapter = int(evidence.get("target_chapter") or chapter or 0)
+        _add_manual_issue(
+            report,
+            "must_handle",
+            code="volume_plan_stale",
+            title="卷纲 revision 已过期",
+            reason="当前章节仍依赖修改前的卷纲 revision。",
+            impact="继续写作会使用过期的卷级决策。",
+            next_action=f"先运行 /webnovel-volume-reload {volume}，再运行 /webnovel-chapter-plan {volume} {target_chapter}。",
+            command=f"/webnovel-volume-reload {volume}",
+            source="project-status",
+            path="大纲",
+        )
     if next_action:
         report["next_actions"].append(
             {
@@ -604,6 +626,15 @@ def build_write_report(project_root: Path, *, chapter: int, volume: int | None =
             path=backup_path,
         )
 
+    from .chapter_reloading import body_evidence, upstream_body_blockers
+    body = body_evidence(project_root, chapter)
+    try:
+        upstream = upstream_body_blockers(project_root, chapter)
+    except (OSError, ValueError):
+        upstream = []
+    if body.get("body_revision_stale") or body.get("body_revision_uncommitted") or body.get("dependency_stale") or upstream:
+        affected = upstream[0] if upstream else chapter
+        _add_manual_issue(report, "must_handle", code="chapter_body_stale", title="正文修改尚未完成重载提交", reason="当前正文或前置章节不再匹配可信提交。", impact="不能沿用旧审查或继续写下一章。", next_action="保留人工正文，重新校验后确认提交。", command=f"/webnovel-chapter-reload {affected}", source="chapter-revision")
     report["overall_status"] = _status_from_issues(report, core_file_count=core_files)
     if report["overall_status"] == STATUS_COMPLETED:
         report["next_actions"].append(
@@ -751,16 +782,61 @@ def build_init_report(project_root: Path, *, chapter: int | None = None, volume:
 
 
 def build_plan_report(project_root: Path, *, chapter: int | None = None, volume: int | None = None) -> dict[str, Any]:
-    target_chapter = int(chapter or 1)
-    report = _new_report(project_root, stage="plan", chapter=target_chapter, volume=volume)
+    target_volume = int(volume or 1)
+    report = _new_report(project_root, stage="plan", chapter=0, volume=target_volume)
     core_files = 0
-    outline_path = project_root / "大纲" / "总纲.md"
-    if outline_path.is_file():
+    required = (
+        ("总纲", project_root / "大纲" / "总纲.md"),
+        (f"第{target_volume}卷节拍表", project_root / "大纲" / f"第{target_volume}卷-节拍表.md"),
+        (f"第{target_volume}卷时间线", project_root / "大纲" / f"第{target_volume}卷-时间线.md"),
+        (f"第{target_volume}卷详细大纲", project_root / "大纲" / f"第{target_volume}卷-详细大纲.md"),
+    )
+    for label, path in required:
+        if path.is_file() and path.read_text(encoding="utf-8").strip():
+            core_files += 1
+            _add_file(report, label=label, path=_rel(project_root, path), status="completed", note="已生成")
+        else:
+            _add_file(report, label=label, path=_rel(project_root, path), status="missing", note="缺失或为空")
+            _add_classified_issue(
+                report,
+                {"code": "mainline_ready=false", "message": f"missing volume artifact: {label}"},
+                source="plan",
+                path=_rel(project_root, path),
+            )
+
+    report["overall_status"] = _status_from_issues(report, core_file_count=core_files)
+    _append_project_status_next_action(report, project_root, None)
+    return report
+
+
+def build_chapter_plan_report(
+    project_root: Path,
+    *,
+    chapter: int | None = None,
+    volume: int | None = None,
+) -> dict[str, Any]:
+    target_chapter = int(chapter or 1)
+    report = _new_report(project_root, stage="chapter-plan", chapter=target_chapter, volume=volume)
+    core_files = 0
+    outline_path, outline_source = find_chapter_outline_file(project_root, target_chapter)
+    if outline_path is not None and outline_path.is_file():
         core_files += 1
-        _add_file(report, label="总纲", path=_rel(project_root, outline_path), status="completed", note="已生成")
+        _add_file(
+            report,
+            label="章纲",
+            path=_rel(project_root, outline_path),
+            status="completed",
+            note="独立章纲" if outline_source == "split" else "旧卷纲回退",
+        )
     else:
-        _add_file(report, label="总纲", path="大纲/总纲.md", status="missing", note="缺少总纲")
-        _add_classified_issue(report, {"code": "mainline_ready=false", "message": "missing outline"}, source="plan", path="大纲/总纲.md")
+        expected = f"大纲/第{target_chapter}章*.md"
+        _add_file(report, label="章纲", path=expected, status="missing", note="章纲缺失")
+        _add_classified_issue(
+            report,
+            {"code": "mainline_ready=false", "message": "missing chapter outline"},
+            source="chapter-plan",
+            path=expected,
+        )
 
     for label, path in contract_files_for_chapter(project_root, target_chapter).items():
         if path.is_file():
@@ -768,7 +844,12 @@ def build_plan_report(project_root: Path, *, chapter: int | None = None, volume:
             _add_file(report, label=f"Story System {label}", path=_rel(project_root, path), status="completed", note="合同已生成")
         else:
             _add_file(report, label=f"Story System {label}", path=_rel(project_root, path), status="missing", note="合同缺失")
-            _add_classified_issue(report, {"code": "mainline_ready=false", "message": f"missing {label} contract"}, source="plan", path=_rel(project_root, path))
+            _add_classified_issue(
+                report,
+                {"code": "mainline_ready=false", "message": f"missing {label} contract"},
+                source="chapter-plan",
+                path=_rel(project_root, path),
+            )
 
     report["overall_status"] = _status_from_issues(report, core_file_count=core_files)
     _append_project_status_next_action(report, project_root, target_chapter)
@@ -799,6 +880,8 @@ def build_user_report(
         return build_review_report(root, chapter=int(chapter or 0), volume=volume)
     if stage == "init":
         return build_init_report(root, chapter=chapter, volume=volume)
+    if stage == "chapter-plan":
+        return build_chapter_plan_report(root, chapter=chapter, volume=volume)
     return build_plan_report(root, chapter=chapter, volume=volume)
 
 

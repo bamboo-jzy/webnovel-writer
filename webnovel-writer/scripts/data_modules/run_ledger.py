@@ -227,13 +227,23 @@ def build_write_resume_plan(
     review_entry = _step_completed(run, "review")
     data_entry = _step_completed(run, "data")
     commit_status = _commit_status(root, chapter)
-    accepted_done = commit_status == "accepted"
+    from .chapter_reloading import body_evidence, upstream_body_blockers
+    body = body_evidence(root, chapter)
+    try:
+        upstream = upstream_body_blockers(root, chapter)
+    except (OSError, ValueError):
+        upstream = []
+    body_changed = bool(body.get("body_revision_stale") or body.get("body_revision_uncommitted") or body.get("dependency_stale") or upstream)
+    accepted_done = commit_status == "accepted" and not body_changed
     rejected_done = commit_status == "rejected"
 
     steps: list[dict[str, str]] = []
     confirmations: list[dict[str, str]] = []
+    if body_changed:
+        affected = upstream[0] if upstream else chapter
+        confirmations.append({"code": "chapter_body_stale", "message": f"保留人工正文；先运行 /webnovel-chapter-reload {affected}，不得自动重写或复用旧审查。"})
 
-    draft_trusted = bool(accepted_done or (chapter_file and _trusted_output(draft_entry, "chapter_file")))
+    draft_trusted = not body_changed and bool(accepted_done or (chapter_file and _trusted_output(draft_entry, "chapter_file")))
     if draft_entry and chapter_file and not draft_trusted:
         confirmations.append(
             {

@@ -37,8 +37,10 @@
 ┌─────────────────────────────────────────────────────────────┐
 │                      Claude Code                           │
 ├─────────────────────────────────────────────────────────────┤
-│  Skills (7个):                                             │
-│    init / plan / write / review / query / learn / dashboard │
+│  Skills (12个):                                             │
+│    init / plan / chapter-plan / write / review / query      │
+│    learn / dashboard / doctor / volume-revise / volume-reload│
+│    chapter-reload                                          │
 ├─────────────────────────────────────────────────────────────┤
 │  Agents (3个):                                             │
 │    Context Agent / Data Agent / Reviewer (含六维审查)        │
@@ -50,6 +52,28 @@
 │    .story-system/ (合同·提交·事件)                           │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+## 规划与写作主链
+
+```text
+总纲
+  ↓
+/webnovel-plan
+  ↓
+卷纲、卷节拍表、卷时间线
+  ↓
+/webnovel-chapter-plan
+  ↓
+独立章纲与章级 Story System 合同
+  ↓
+/webnovel-write
+```
+
+`/webnovel-plan` 只负责卷级规划和设定/总纲同步；`/webnovel-volume-revise` 用确认式流程定向修改已有卷纲，`/webnovel-volume-reload` 负责人工编辑后的内容 revision 重载。revision 变化会把依赖旧卷纲的章纲登记为 `stale`，但不会覆盖作者文件；`/webnovel-chapter-plan` 在卷级产物齐全后按批次生成或刷新独立章纲与章节合同。卷纲完成本身不代表章节已经具备写作条件。
+
+卷纲 revision 以节拍表、时间线、详细大纲三份文件的名称与内容 SHA-256 为依据。写前门禁会比较章节记录的 `source_volume_revision` 与当前 revision；不一致时必须先重载卷纲并重新规划章纲。
+
+正文人工修改由 `/webnovel-chapter-reload` 管理：正文内容 SHA-256 形成 `content_revision`，状态同时记录 `draft_revision`、`validated_revision` 和 `committed_revision`。重载会备份正文、state、章级合同、旧 commit 与临时 artifacts，并将后续章节标记为 `previous_chapter_revision_changed`；reviewer、data-agent 和 precommit 必须携带同一 `validation_input`。旧 accepted commit 归档到 `commits/history/`，事实变化且现有增量投影无法安全撤销时以 `revision_projection_unsafe` 阻断，而不是覆盖旧事实。
 
 ## Agent 分工
 
@@ -95,6 +119,8 @@ story-system --persist
     -> 写入合同种子（MASTER_SETTING.json 等）
 story-system --emit-runtime-contracts --chapter N
     -> 生成运行时合同 + 写前校验
+chapter-reload --chapter N --validate
+    -> 校验当前正文与四份 artifacts 的同版输入
 chapter-commit --chapter N
     -> 提交 accepted commit + 执行各投影写入
 story-events --chapter N / --health

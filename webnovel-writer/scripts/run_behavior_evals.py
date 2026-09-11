@@ -303,9 +303,10 @@ def _commit_payload(
     status: str = "accepted",
     projection_status: dict[str, str] | None = None,
     review_result: dict[str, Any] | None = None,
+    content_revision: str = "",
 ) -> dict[str, Any]:
     return {
-        "meta": {"chapter": chapter, "status": status},
+        "meta": {"chapter": chapter, "status": status, "content_revision": content_revision},
         "review_result": review_result or {"blocking_count": 0},
         "fulfillment_result": {"planned_nodes": [], "covered_nodes": [], "missed_nodes": [], "extra_nodes": []},
         "disambiguation_result": {"pending": []},
@@ -320,6 +321,7 @@ def _eval_user_report_probe(root: Path, case: dict[str, Any]) -> dict[str, Any]:
     if str(scripts_dir) not in sys.path:
         sys.path.insert(0, str(scripts_dir))
     from data_modules.projection_log import append_projection_run
+    from data_modules.chapter_reloading import chapter_body_revision
     from data_modules.user_report import build_user_report, render_user_report_text
 
     scenario = str(case.get("scenario") or "")
@@ -341,7 +343,8 @@ def _eval_user_report_probe(root: Path, case: dict[str, Any]) -> dict[str, Any]:
                         "review_skipped": True,
                         "review_mode": "minimal",
                         "summary": "minimal mode: reviewer skipped",
-                    }
+                    },
+                    content_revision=chapter_body_revision(project_root, 1),
                 ),
             )
             (project_root / ".webnovel" / "backups" / "ch0001_ok").mkdir(parents=True, exist_ok=True)
@@ -358,7 +361,7 @@ def _eval_user_report_probe(root: Path, case: dict[str, Any]) -> dict[str, Any]:
             ok = report["overall_status"] != "completed" and bool(report["issues"]["must_handle"])
             evidence = [report["overall_status"], json.dumps(report["issues"], ensure_ascii=False)]
         elif scenario == "projection_retry_auto_handled":
-            failed_payload = _commit_payload(projection_status={"state": "done", "index": "failed:locked", "summary": "skipped", "memory": "skipped", "vector": "skipped"})
+            failed_payload = _commit_payload(content_revision=chapter_body_revision(project_root, 1), projection_status={"state": "done", "index": "failed:locked", "summary": "skipped", "memory": "skipped", "vector": "skipped"})
             _write_json(commit_path, failed_payload)
             append_projection_run(project_root, failed_payload, {"index": {"status": "failed:locked"}}, commit_path=commit_path)
             append_projection_run(

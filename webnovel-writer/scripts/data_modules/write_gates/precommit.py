@@ -85,6 +85,14 @@ def run_precommit_gate(project_root: Path, chapter: int) -> dict:
         disambiguation_result=paths["disambiguation_result"],
         extraction_result=paths["extraction_result"],
     )
+    from ..chapter_reloading import assert_artifact_freshness
+    try:
+        assert_artifact_freshness(project_root, chapter, artifact_report.get("payloads", {}), require_validated=True)
+    except (OSError, ValueError, KeyError) as exc:
+        errors.append(issue("chapter_artifacts_stale", message=str(exc), repair=f"运行 /webnovel-chapter-reload {chapter}，重新审查和提取后执行 chapter-reload --validate"))
+    if snapshot.upstream_body_stale or snapshot.chapter_contract_stale or snapshot.volume_plan_stale:
+        errors.append(issue("chapter_inputs_stale", message="前置正文或规划合同过期", repair="先处理前置章节修订或刷新章纲合同。"))
+
     for item in artifact_report.get("errors") or []:
         errors.append(
             issue(

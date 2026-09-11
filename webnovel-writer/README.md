@@ -8,19 +8,23 @@
 
 | 类型 | 数量 | 位置 |
 |------|------|------|
-| Skills（斜杠命令） | 7 | `skills/<name>/SKILL.md` |
+| Skills（斜杠命令） | 12 | `skills/<name>/SKILL.md` |
 | Agents（子代理） | 4 | `agents/*.md` |
 | Python 工具 | 统一入口 | `scripts/webnovel.py` |
 | 题材/写法数据 | 9 CSV | `references/csv/*.csv` |
 | 题材模板 | 按题材 | `templates/genres/*.md` |
 | Dashboard 前端 | 预打包 | `dashboard/frontend/dist/`（随包发布，无需本地构建） |
 
-### 7 个 Skill
+### 12 个 Skill
 
 | 命令 | 用途 |
 |------|------|
 | `/webnovel-init` | 深度初始化项目骨架、设定集、总纲 |
-| `/webnovel-plan` | 拆卷纲、时间线、章纲，并写回新增设定 |
+| `/webnovel-plan` | 只生成卷级节拍表、时间线和纯卷纲，并写回新增设定 |
+| `/webnovel-volume-revise` | 先确认影响范围，再引导式修改卷纲并刷新 revision |
+| `/webnovel-volume-reload` | 人工编辑卷纲后重算 revision，标记下游章纲 stale |
+| `/webnovel-chapter-plan` | 基于已完成卷纲生成独立章纲，并刷新章级 Story System 合同 |
+| `/webnovel-chapter-reload` | 人工修改正文后重载 revision，重新审查/提取并确认提交 |
 | `/webnovel-write` | 一条龙写章：上下文 → 起草 → 审查 → 润色 → 提交 → 备份 |
 | `/webnovel-review` | 多维度审查章节并把指标落库 |
 | `/webnovel-query` | 查询设定、角色、伏笔、运行时信息（只读） |

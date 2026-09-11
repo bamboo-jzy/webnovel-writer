@@ -30,6 +30,7 @@ ALL_PROMPT_FILES = AGENT_FILES + SKILL_FILES
 AUTHOR_REPORT_SKILLS = (
     "webnovel-init",
     "webnovel-plan",
+    "webnovel-chapter-plan",
     "webnovel-write",
     "webnovel-review",
 )
@@ -55,7 +56,7 @@ REGISTERED_CLI_SUBCOMMANDS = {
     "index", "state", "rag", "style", "entity", "context", "memory",
     "migrate", "status", "update-state", "backup", "archive",
     "init", "extract-context", "memory-contract", "project-memory", "review-pipeline",
-    "placeholder-scan", "master-outline-sync",
+    "placeholder-scan", "master-outline-sync", "volume-reload", "chapter-reload",
     "story-system", "chapter-commit", "story-events", "knowledge",
 }
 
@@ -700,7 +701,7 @@ def test_placeholder_scan_runs_in_both_plan_and_write_skills():
 
 # A 类红线 3：story-system 章级刷新必须传入真实 CHAPTER_GOAL 变量，
 # 不得把 {章纲目标} / 第N章章纲目标 这类占位文本当作 positional query。
-@pytest.mark.parametrize("skill_name", ["webnovel-plan", "webnovel-write"])
+@pytest.mark.parametrize("skill_name", ["webnovel-write", "webnovel-chapter-plan"])
 def test_story_system_chapter_refresh_uses_real_goal_not_placeholder_query(skill_name: str):
     """红线 3：story-system 的 query 实参是 ${CHAPTER_GOAL} 变量，且禁占位文本写在命令里。"""
     text = _read_text(SKILLS_DIR / skill_name / "SKILL.md")
@@ -720,7 +721,7 @@ def test_story_system_chapter_refresh_uses_real_goal_not_placeholder_query(skill
 
 
 # A 类红线 4：story-system 章级刷新必须 --persist 且 --emit-runtime-contracts。
-@pytest.mark.parametrize("skill_name", ["webnovel-plan", "webnovel-write"])
+@pytest.mark.parametrize("skill_name", ["webnovel-write", "webnovel-chapter-plan"])
 def test_story_system_chapter_refresh_persists_runtime_contracts(skill_name: str):
     """红线 4：章级 story-system 刷新必须同时 --persist 与 --emit-runtime-contracts。"""
     text = _read_text(SKILLS_DIR / skill_name / "SKILL.md")
@@ -773,22 +774,43 @@ def test_write_skill_postcommit_verifies_five_projections_and_retry_only():
     )
 
 
-# A 类红线 12：plan 必须覆盖节拍表/时间线/结构化章纲节点/结构化总纲写回/状态更新。
-def test_plan_skill_covers_outline_writeback_and_state_sync_contract():
-    """红线 12：plan 的节拍表/时间线/章纲节点/总纲写回 JSON/master-outline-sync/update-state。"""
+# A 类红线 12：plan 必须覆盖节拍表/时间线/纯卷级总纲写回/状态更新。
+def test_plan_skill_covers_volume_outline_writeback_and_state_sync_contract():
+    """红线 12：plan 只负责卷级产物，不生成逐章执行节点或章级合同。"""
     text = _read_text(SKILLS_DIR / "webnovel-plan" / "SKILL.md")
-    # 节拍表 / 时间线 输出物
     assert "大纲/第{volume_id}卷-节拍表.md" in text
     assert "大纲/第{volume_id}卷-时间线.md" in text
-    # 结构化章纲节点
-    for node in ("CBN", "CPNs", "CEN", "必须覆盖节点", "本章禁区"):
-        assert node in text, f"plan 缺少结构化章纲节点标记 {node}"
-    # 结构化总纲写回文件（不可从自由文本推断伏笔）
+    assert "大纲/第{volume_id}卷-详细大纲.md" in text
     assert "大纲/第{volume_id}卷-总纲写回.json" in text
-    # 设定写回 + 状态同步命令
     cmds = _extract_cli_subcommands(text)
     assert "master-outline-sync" in cmds, "plan 缺少 master-outline-sync 写回命令"
-    assert "update-state" in cmds, "plan 缺少 update-state 状态更新命令"
+    assert "volume-reload" in cmds, "plan 缺少 volume-reload 状态登记命令"
+    assert "不生成逐章章纲" in text
+    assert "不调用 `story-system --chapter`" in text
+    assert "CBN：" not in text
+    assert "CPNs：" not in text
+    assert "CEN：" not in text
+
+
+def test_chapter_plan_skill_covers_split_outline_nodes_and_contract_refresh():
+    """红线 12：chapter-plan 负责独立章纲、结构化节点和章级合同。"""
+    text = _read_text(SKILLS_DIR / "webnovel-chapter-plan" / "SKILL.md")
+    for required in (
+        "大纲/第N章-标题.md",
+        "目标：",
+        "阻力：",
+        "代价：",
+        "时间锚点：",
+        "CBN：",
+        "CPNs：",
+        "CEN：",
+        "必须覆盖节点：",
+        "本章禁区：",
+        "story-system \"${CHAPTER_GOAL}\"",
+        "--emit-runtime-contracts",
+        "--chapter-planned",
+    ):
+        assert required in text
 
 
 # ---------------------------------------------------------------------------

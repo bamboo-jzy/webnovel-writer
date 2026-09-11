@@ -309,28 +309,83 @@ class StateUpdater:
         self.state["progress"]["last_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print(f"📝 更新进度: 第{current_chapter}章, 总字数: {total_words}")
 
-    def mark_volume_planned(self, volume: int, chapters_range: str):
-        """标记卷已规划"""
+    def mark_volume_planned(
+        self,
+        volume: int,
+        chapters_range: str,
+        planning_revision: str = "",
+        reload_source: str = "",
+    ):
+        """Mark a volume plan and its content revision."""
         if "volumes_planned" not in self.state["progress"]:
             self.state["progress"]["volumes_planned"] = []
 
-        # 检查是否已存在
+        now = datetime.now().strftime("%Y-%m-%d")
         for item in self.state["progress"]["volumes_planned"]:
             if item.get("volume") == volume:
                 print(f"⚠️  第{volume}卷已规划，更新章节范围")
                 item["chapters_range"] = chapters_range
-                item["updated_at"] = datetime.now().strftime("%Y-%m-%d")
+                item["updated_at"] = now
+                if planning_revision:
+                    item["planning_revision"] = planning_revision
+                if reload_source:
+                    item["reload_source"] = reload_source
                 return
 
-        self.state["progress"]["volumes_planned"].append({
+        entry = {
             "volume": volume,
             "chapters_range": chapters_range,
-            "planned_at": datetime.now().strftime("%Y-%m-%d")
-        })
+            "planned_at": now,
+        }
+        if planning_revision:
+            entry["planning_revision"] = planning_revision
+        if reload_source:
+            entry["reload_source"] = reload_source
+        self.state["progress"]["volumes_planned"].append(entry)
         print(f"📝 标记第{volume}卷已规划: 第{chapters_range}章")
 
+    def mark_chapter_planned(
+        self,
+        chapter: int,
+        outline_file: str,
+        volume: int,
+        volume_revision: str = "",
+    ) -> None:
+        """Record a chapter whose outline and contracts passed validation."""
+        progress = self.state["progress"]
+        from data_modules.chapter_reloading import chapter_candidates, upstream_body_blockers
+        revision = progress.get("chapter_revisions", {}).get(str(chapter), {})
+        root = Path(self.state_file).resolve().parent.parent
+        if revision.get("stale_dependencies") and not chapter_candidates(root, chapter):
+            if upstream_body_blockers(root, chapter, self.state):
+                raise ValueError("previous chapter revision must be resolved before chapter planning")
+            revision["stale_dependencies"] = {}
+            revision.pop("stale_reason", None)
+        planned = progress.setdefault("chapters_planned", [])
+        planned_at = datetime.now().strftime("%Y-%m-%d")
+        entry = {
+            "chapter": int(chapter),
+            "volume": int(volume),
+            "outline_file": outline_file,
+            "planned_at": planned_at,
+            "updated_at": planned_at,
+        }
+        if volume_revision:
+            entry["source_volume_revision"] = volume_revision
+
+        for index, item in enumerate(planned):
+            if isinstance(item, dict) and item.get("chapter") == int(chapter):
+                entry["planned_at"] = item.get("planned_at") or planned_at
+                planned[index] = {**item, **entry}
+                print(f"chapter {chapter} planning status updated")
+                return
+
+        planned.append(entry)
+        planned.sort(key=lambda item: int(item.get("chapter") or 0) if isinstance(item, dict) else 0)
+        print(f"chapter {chapter} planned: {outline_file}")
+
     def add_review_checkpoint(self, chapters_range: str, report_file: str):
-        """添加审查记录"""
+        """Add a review checkpoint."""
         if "review_checkpoints" not in self.state:
             self.state["review_checkpoints"] = []
 
@@ -339,19 +394,16 @@ class StateUpdater:
             "report": report_file,
             "reviewed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         })
-        print(f"📝 添加审查记录: 第{chapters_range}章 → {report_file}")
+        print(f"review checkpoint added: {chapters_range} -> {report_file}")
 
     def update_strand_tracker(self, strand: str, chapter: int):
-        """更新主导情节线（Strand Weave系统）"""
-        # 验证 strand 参数
+        """Update the dominant strand tracker."""
         valid_strands = ["quest", "fire", "constellation"]
         if strand.lower() not in valid_strands:
-            print(f"❌ 无效的情节线类型: {strand}（有效值: quest, fire, constellation）")
+            print(f"invalid strand: {strand}")
             return False
 
         strand = strand.lower()
-
-        # 初始化 strand_tracker（如果不存在）
         if "strand_tracker" not in self.state:
             self.state["strand_tracker"] = {
                 "last_quest_chapter": 0,
@@ -363,31 +415,16 @@ class StateUpdater:
             }
 
         tracker = self.state["strand_tracker"]
-
-        # 更新对应 strand 的最后章节
         tracker[f"last_{strand}_chapter"] = chapter
-
-        # 判断是否切换 strand
         if tracker.get("current_dominant") != strand:
             tracker["current_dominant"] = strand
             tracker["chapters_since_switch"] = 1
         else:
             tracker["chapters_since_switch"] += 1
-
-        # 添加到历史记录
-        tracker["history"].append({
-            "chapter": chapter,
-            "dominant": strand
-        })
-
-        # 只保留最近50章的历史（避免文件过大）
+        tracker["history"].append({"chapter": chapter, "dominant": strand})
         if len(tracker["history"]) > 50:
             tracker["history"] = tracker["history"][-50:]
-
-        print(f"✅ strand_tracker 已更新")
-        print(f"   - 第{chapter}章主导情节线: {strand}")
-        print(f"   - 该情节线已连续{tracker['chapters_since_switch']}章")
-
+        print("strand_tracker updated")
         return True
 
 def main():
@@ -509,6 +546,34 @@ def main():
         help='章节范围（如 "1-100"）'
     )
 
+    # 章纲规划
+    parser.add_argument(
+        '--chapter-planned',
+        type=int,
+        metavar='CHAPTER',
+        help='标记章纲和章级合同均已完成（章节号）'
+    )
+
+    parser.add_argument(
+        '--chapter-outline-file',
+        metavar='PATH',
+        help='已登记章纲文件路径（与 --chapter-planned 一起使用）'
+    )
+
+    parser.add_argument(
+        '--volume',
+        type=int,
+        metavar='VOLUME',
+        help='章纲所属卷号（与 --chapter-planned 一起使用）'
+    )
+
+    parser.add_argument(
+        '--volume-revision',
+        default='',
+        metavar='REVISION',
+        help='章纲生成时对应的卷纲 revision'
+    )
+
     # 审查记录
     parser.add_argument(
         '--add-review',
@@ -537,6 +602,7 @@ def main():
         args.resolve_foreshadowing,
         args.progress,
         args.volume_planned,
+        args.chapter_planned,
         args.add_review,
         args.strand_dominant
     ]):
@@ -600,6 +666,17 @@ def main():
                 print("❌ --volume-planned 需要 --chapters-range 参数")
                 sys.exit(1)
             updater.mark_volume_planned(args.volume_planned, args.chapters_range)
+
+        if args.chapter_planned:
+            if not args.chapter_outline_file or not args.volume:
+                print("❌ --chapter-planned 需要 --chapter-outline-file 和 --volume 参数")
+                sys.exit(1)
+            updater.mark_chapter_planned(
+                args.chapter_planned,
+                args.chapter_outline_file,
+                args.volume,
+                args.volume_revision,
+            )
 
         if args.add_review:
             chapters_range, report_file = args.add_review

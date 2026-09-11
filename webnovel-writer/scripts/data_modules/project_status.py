@@ -39,6 +39,13 @@ def _project_title(project_root: Path) -> str:
 
 
 def next_action_for_phase(snapshot: ProjectPhaseSnapshot) -> str:
+    if snapshot.upstream_body_stale:
+        return f"run /webnovel-chapter-reload {snapshot.upstream_body_stale[0]} before continuing chapter {snapshot.target_chapter}"
+    if snapshot.body_revision_stale or snapshot.body_revision_uncommitted or snapshot.body_evidence.get("dependency_stale"):
+        return f"run /webnovel-chapter-reload {snapshot.target_chapter}; revalidate before committing"
+    if snapshot.volume_plan_stale:
+        volume = snapshot.target_volume or 1
+        return f"run /webnovel-volume-reload {volume}, then /webnovel-chapter-plan {volume} {snapshot.target_chapter}"
     phase = snapshot.phase
     target = snapshot.target_chapter
     if phase == PHASE_NO_PROJECT:
@@ -46,9 +53,10 @@ def next_action_for_phase(snapshot: ProjectPhaseSnapshot) -> str:
     if phase == PHASE_INIT_SCAFFOLDED:
         return "run webnovel.py doctor --format text and fix missing init files"
     if phase == PHASE_INIT_READY:
-        return "run /webnovel-plan or refresh Story System contracts"
+        return "run /webnovel-plan 1 to create the first volume plan"
     if phase == PHASE_PLAN_IN_PROGRESS:
-        return f"finish planning and emit runtime contracts for chapter {target}"
+        volume = snapshot.target_volume or 1
+        return f"run /webnovel-chapter-plan {volume} {target} to create chapter outline and contracts"
     if phase == PHASE_CHAPTER_CONTRACT_READY:
         return f"run /webnovel-write {target}"
     if phase == PHASE_DRAFT_IN_PROGRESS:
@@ -71,6 +79,7 @@ def build_project_status(project_root: str | Path | None, chapter: int | None = 
         "project": _project_title(root) if root else "",
         "latest_accepted_chapter": snapshot.latest_accepted_chapter,
         "target_chapter": snapshot.target_chapter,
+        "target_volume": snapshot.target_volume,
         "phase": snapshot.phase,
         "blocking": list(snapshot.blocking),
         "warnings": list(snapshot.warnings),

@@ -58,8 +58,12 @@ Webnovel Writer 用业余时间维护。如果它帮你省下了梳理设定、�
 | 能力 | 命令 | 说明 |
 |------|------|------|
 | 深度初始化 | `/webnovel-init` | 分阶段问答，帮你把书的骨架、设定集、总纲和初始状态搭起来 |
-| 卷纲规划 | `/webnovel-plan` | 基于总纲拆卷、拆章、补时间线，并写回新增设定 |
+| 卷纲规划 | `/webnovel-plan` | 基于总纲生成卷级节拍表、时间线和纯卷纲，并写回新增设定 |
+| 卷纲修改 | `/webnovel-volume-revise` | 先分析并确认影响，再定向修改卷纲、备份并刷新 revision |
+| 卷纲重载 | `/webnovel-volume-reload` | 人工编辑卷纲后重算 revision，并标记依赖章节为 stale |
+| 章纲规划 | `/webnovel-chapter-plan` | 基于卷纲按批次生成独立章纲，校验承接并刷新章级 Story System 合同 |
 | 章节创作 | `/webnovel-write` | 一条龙写完一章：备上下文、起草、审查、润色、记录事实、自动备份 |
+| 正文重载 | `/webnovel-chapter-reload` | 人工修改正文后按内容 revision 备份、重新校验 artifacts，并在确认后提交 |
 | 质量审查 | `/webnovel-review` | 从爽点、一致性、节奏、OOC、连贯性、追读力等维度审查章节 |
 | 状态查询 | `/webnovel-query` | 查询角色、伏笔、节奏、实体关系和运行时信息 |
 | 项目学习 | `/webnovel-learn` | 把这本书里好用的写法记下来，存进项目长期记忆 |
@@ -70,7 +74,7 @@ Webnovel Writer 用业余时间维护。如果它帮你省下了梳理设定、�
 
 ```mermaid
 flowchart LR
-    User[作者 / Claude Code] --> Skills[8 个 Skill 命令]
+    User[作者 / Claude Code] --> Skills[12 个 Skill 命令]
     Skills --> Agents[Context / Reviewer / Data / Deconstruction Agent]
     Agents --> Story[.story-system 合同与提交链]
     Story --> Commit[accepted CHAPTER_COMMIT]
@@ -156,8 +160,9 @@ RERANK_API_KEY=your_rerank_api_key
 ### 5. 开始规划和写作
 
 ```bash
-/webnovel-plan 1      # 规划第 1 卷
-/webnovel-write 1     # 写第 1 章
+/webnovel-plan 1            # 规划第 1 卷卷纲
+/webnovel-chapter-plan 1 1-10  # 生成第 1 卷第 1-10 章的独立章纲与合同
+/webnovel-write 1             # 写第 1 章
 /webnovel-review 1-5  # 审查第 1-5 章
 /webnovel-query 伏笔  # 查询项目状态
 ```
@@ -188,7 +193,7 @@ Dashboard 是个只读面板，能看项目状态、实体关系图、章节内�
 
 ### 最终报告怎么看
 
-`/webnovel-init`、`/webnovel-plan`、`/webnovel-write` 和 `/webnovel-review` 结束时都会给一份面向作者的最终报告，不直接把内部 JSON、traceback 或长命令日志甩出来。报告先给一句总状态：
+`/webnovel-init`、`/webnovel-plan`、`/webnovel-chapter-plan`、`/webnovel-write` 和 `/webnovel-review` 结束时都会给一份面向作者的最终报告，不直接把内部 JSON、traceback 或长命令日志甩出来。报告先给一句总状态：
 
 - **已完成**：目标产物和关键校验都通过，可以进入下一步。
 - **部分完成**：主要产物已保留，但有跳过项、自动处理项或待确认的小尾巴。
@@ -219,7 +224,11 @@ Dashboard 是个只读面板，能看项目状态、实体关系图、章节内�
 | 命令 | 示例 | 用途 |
 |------|------|------|
 | `/webnovel-init` | `/webnovel-init` | 初始化新书项目 |
-| `/webnovel-plan` | `/webnovel-plan 1` | 生成卷纲、时间线和章纲 |
+| `/webnovel-plan` | `/webnovel-plan 1` | 生成第 1 卷的卷级节拍表、时间线和纯卷纲 |
+| `/webnovel-volume-revise` | `/webnovel-volume-revise 1` | 确认式引导修改第 1 卷卷纲 |
+| `/webnovel-volume-reload` | `/webnovel-volume-reload 1` | 人工编辑后重载卷纲 revision 并标记 stale |
+| `/webnovel-chapter-plan` | `/webnovel-chapter-plan 1 1-10` | 生成第 1 卷第 1-10 章的独立章纲与章级合同 |
+| `/webnovel-chapter-reload` | `/webnovel-chapter-reload 12` | 人工修改第 12 章后重载正文 revision、重新校验并确认提交 |
 | `/webnovel-write` | `/webnovel-write 45` | 写作并提交指定章节 |
 | `/webnovel-review` | `/webnovel-review 1-5` | 审查章节范围 |
 | `/webnovel-query` | `/webnovel-query 萧炎` | 查询角色、伏笔、状态等信息 |
@@ -246,6 +255,7 @@ python -X utf8 "<CLAUDE_PLUGIN_ROOT>/scripts/webnovel.py" --project-root "<PROJE
 | `write-gate` | 写前、提交前、提交后三个自然边界校验 |
 | `projections` | 基于已有 commit 补跑或重放投影 |
 | `story-system` | 生成合同种子和 runtime contracts |
+| `chapter-reload` | 重载人工修改后的正文 revision，校验当前 artifacts 并标记下游章节 stale |
 | `chapter-commit` | 提交章节事实并驱动投影 |
 | `story-events` | 查询章节事件或检查事件链健康 |
 | `memory` | 查看、查询、导出和回填长期记忆 |

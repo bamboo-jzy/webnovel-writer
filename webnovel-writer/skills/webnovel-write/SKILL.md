@@ -23,7 +23,7 @@ argument-hint: "[章号] [--fast|--minimal]"
 
 - 禁止并步、跳步、伪造审查
 - 必须使用 `Agent` 工具调用指定 subagent；不得用主流程口头代替 subagent 输出
-- 审查只跑一轮；blocking issue 定点修复或经用户裁决后才进 Step 4/5
+- 每个正文版本审查一次；blocking issue 修复或润色造成内容变化时，必须重载新版本并重新审查
 - 失败只补跑失败步骤，不回退
 - 参考资料按步骤按需加载
 
@@ -54,9 +54,19 @@ export PROJECT_ROOT="$(python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-roo
 python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" placeholder-scan --format text
 ```
 
-### 准备：刷新合同树
+### 准备：确认章纲与合同的新鲜度
 
-genre 从 `.webnovel/state.json` 的初始化配置快照读取，用于刷新合同树；写前主链真源仍是 `.story-system/` 合同。调用 story-system 前必须先从详细大纲解析真实本章目标，禁止传 `{章纲目标}`、`第N章章纲目标` 等占位 query。
+genre 从 `.webnovel/state.json` 的初始化配置快照读取。写作前必须先确认目标章已有非空章纲；卷纲完成不等于章纲完成。新流程优先读取 `大纲/第{chapter_num}章-*.md`，旧项目才允许从卷级详细大纲读取对应章节作为 fallback。
+
+若目标章没有章纲，立即阻断并提示：
+
+```text
+第 12 章尚未完成章纲规划，请先运行 `/webnovel-chapter-plan 1 12`。
+```
+
+章纲存在但晚于任一章级 Story System 合同时，也必须阻断；先让作者重新运行 `/webnovel-chapter-plan {volume_id} {chapter_num}` 刷新合同。若当前卷纲 revision 与章纲登记的 `source_volume_revision` 不一致，也必须阻断，先运行 `/webnovel-volume-reload {volume_id}`，再运行 `/webnovel-chapter-plan {volume_id} {chapter_num}`。不得从卷纲摘要、正文摘要或 `dynamic_context` 自由猜测本章目标，也不得使用 `{章纲目标}`、`第N章章纲目标` 等占位 query。
+
+从真实章纲执行字段解析 `CHAPTER_GOAL` 后，才允许运行：
 
 ```bash
 GENRE="$(python -X utf8 -c "import json,sys; s=json.load(open('${PROJECT_ROOT}/.webnovel/state.json',encoding='utf-8')); pi=s.get('project_info',{}); print(pi.get('genre') or s.get('project',{}).get('genre',''))")"
@@ -68,7 +78,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" \
   write-gate --chapter {chapter_num} --stage prewrite --format json
 ```
 
-必备文件：`MASTER_SETTING.json`（调性/禁忌）、`volume_{NNN}.json`（卷级节奏）、`chapter_{NNN}.review.json`（必须节点/禁区）。缺失则阻断。
+必备文件：非空章纲、`MASTER_SETTING.json`（调性/禁忌）、`volume_{NNN}.json`（卷级节奏）、`chapter_{NNN}.json` 和 `chapter_{NNN}.review.json`。缺失、过期或新流程只有卷级产物时均阻断。
 
 `chapter_{NNN}.json` 必须优先检查顶层 `chapter_directive`。`chapter_focus` 只能来自 `chapter_directive.goal` 或真实 query，不得从 `dynamic_context` 的参考摘要继承。
 
@@ -119,6 +129,15 @@ Task:
 
 ### Step 3：审查
 
+先登记本轮正文输入，保留返回的 validation_input，传给 reviewer 与 data-agent：
+
+```bash
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" chapter-reload \
+  --chapter {chapter_num} --source generated_draft --format json
+```
+
+正文已由作者手改或已有 accepted commit 时，不使用 generated_draft 绕过重载确认，改运行 `/webnovel-chapter-reload {chapter_num}`。
+
 必须使用 `Agent` 工具调用 `reviewer`，不得由主流程伪造审查 JSON。
 
 Use the Agent tool to run `webnovel-writer:reviewer`.
@@ -128,6 +147,7 @@ Task:
 - chapter_file=${CHAPTER_FILE}
 - project_root=${PROJECT_ROOT}
 - scripts_dir=${SCRIPTS_DIR}
+- validation_input={本轮 chapter-reload 返回的原始对象}；顶层 source 原样回传，读取前后核对正文 SHA-256。
 - 只返回严格的 reviewer schema JSON，不写任何文件。
 - 不评分、不口头总结。
 
@@ -159,12 +179,12 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" rev
   --save-metrics
 ```
 
-审查只跑一轮，reviewer 只调用一次。`blocking=true` 的问题在不改剧情、不破设定的前提下定点修复后直接进 Step 4，不重新调用 reviewer；确实无法修复的 blocking 问题用 `AskUserQuestion` 让用户裁决（接受当前版本 / 手动修复 / 放弃）。非 blocking issue 交给 Step 4 处理。`--fast` 只检查 setting/timeline/continuity。
+同一正文版本只审查一次。`blocking=true` 问题修复后必须重载并审查修改后的版本，不能用旧报告证明新稿通过；无法修复时用 `AskUserQuestion` 让用户裁决（手动修复 / 调整规划 / 放弃），不能直接接受阻断 artifact。非 blocking issue 交给 Step 4 处理，若正文变化仍需重新审查。`--fast` 只检查 setting/timeline/continuity。
 
 `--minimal` 不调用 reviewer 与 `review-pipeline`，但必须**覆盖写入**本章新的 no-review `review_results.json`（禁止复用旧 artifact），使 Step 5 提交链有有效 `--review-result`（成功标准“审查已落库”对 `--minimal` 的豁免仍成立）：
 
 ```bash
-python -X utf8 -c "import json,os; from pathlib import Path; root=Path(os.environ['PROJECT_ROOT']); ch=int('{chapter_num}'); p=root/'.webnovel'/'tmp'/'review_results.json'; p.parent.mkdir(parents=True,exist_ok=True); p.write_text(json.dumps({'chapter':ch,'issues':[],'issues_count':0,'blocking_count':0,'has_blocking':False,'summary':'minimal mode: reviewer skipped by user-selected --minimal flow','review_skipped':True,'review_mode':'minimal'},ensure_ascii=False,indent=2),encoding='utf-8')"
+python -X utf8 -c "import json,os; from pathlib import Path; root=Path(os.environ['PROJECT_ROOT']); ch=int('{chapter_num}'); source=json.loads((root/'.webnovel'/'state.json').read_text(encoding='utf-8'))['progress']['chapter_revisions'][str(ch)]['validation_input']; p=root/'.webnovel'/'tmp'/'review_results.json'; p.parent.mkdir(parents=True,exist_ok=True); p.write_text(json.dumps({'source':source,'chapter':ch,'issues':[],'issues_count':0,'blocking_count':0,'has_blocking':False,'summary':'minimal mode: reviewer skipped by user-selected --minimal flow','review_skipped':True,'review_mode':'minimal'},ensure_ascii=False,indent=2),encoding='utf-8')"
 ```
 
 ### Step 4：润色
@@ -173,7 +193,7 @@ python -X utf8 -c "import json,os; from pathlib import Path; root=Path(os.enviro
 
 顺序：修复非 blocking issue → 风格适配 → 排版 → Anti-AI 终检。
 
-只改表达不改事实。`anti_ai_force_check=fail` 时不进 Step 5。`--minimal` 仅排版。
+只改表达不改事实。`anti_ai_force_check=fail` 时不进 Step 5。`--minimal` 仅排版。任何正文变化后，先重新执行 Step 3 的 chapter-reload 登记；默认/fast 重新调用 reviewer，minimal 重新生成绑定新输入的 no-review artifact。最终审查后不得继续修改正文。
 
 ### Step 5：提交
 
@@ -189,6 +209,7 @@ Task:
 - project_root=${PROJECT_ROOT}
 - scripts_dir=${SCRIPTS_DIR}
 - output_dir=${PROJECT_ROOT}/.webnovel/tmp
+- validation_input={最终正文版本 chapter-reload 返回的原始对象}；三份 artifact 顶层 source 必须匹配。
 - 按你自己的 schema（见 data-agent 输出格式段）生成 fulfillment_result.json、disambiguation_result.json、extraction_result.json 三份 artifact。
 - 你是这三份 artifact 的唯一写入者；不直接写 state/index/summaries/memory/vectors/projection。
 
@@ -213,7 +234,13 @@ artifact 字段 schema 由 data-agent 自身定义、runtime validator 校验；
 
 #### 5.2 提交前校验与 CHAPTER_COMMIT
 
-先跑 precommit gate：
+先校验并登记当前正文对应的四份 artifacts，再跑 precommit gate：
+
+```bash
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" chapter-reload \
+  --chapter {chapter_num} --validate --format json
+```
+
 
 ```bash
 python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" \
@@ -303,7 +330,9 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" run
   --format json
 ```
 
-`run-ledger write-resume` 只给续跑建议，不自动覆盖文件。它会根据正文、审查结果、data artifacts、commit、projection 和备份状态判断从哪里继续。正文被手动改过、章纲更新晚于正文、本章已 accepted 又重跑时，必须停下用有限选项询问：沿用当前正文 / 重新起草 / 只查看状态；不得覆盖作者手改。
+`run-ledger write-resume` 只给续跑建议，不自动覆盖文件。正文 hash 改变、旧正文没有可信 hash、或前置章修订未处理时，停止自动起草和旧结果复用，转到 `/webnovel-chapter-reload {chapter_num}`；不得覆盖作者手改。作者如明确要求重新起草，也要先备份并重新登记输入，不能沿用旧 accepted 状态跳过审查。这里的恢复选择是：沿用当前正文 / 重新起草 / 只查看状态；正文被手动改过或章纲更新晚于正文时，必须停在卡点并请求确认。
+
+恢复契约关键词：可信断点；正文被手动改过；章纲更新晚于正文；本章已 accepted；沿用当前正文 / 重新起草 / 只查看状态；不得覆盖作者手改。
 
 每个关键步骤完成后记录 `run-ledger record-write-step`，至少记录 step、status、输入/输出文件路径、problems、auto_handled 和 duration_ms，供下一次续跑和最终报告使用。
 

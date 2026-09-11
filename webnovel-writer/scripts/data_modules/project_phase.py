@@ -9,13 +9,26 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from chapter_outline_loader import volume_num_for_chapter_from_state
+    from chapter_outline_loader import (
+        chapter_outline_revision,
+        chapter_planned_source_revision,
+        find_chapter_outline_file,
+        volume_num_for_chapter_from_state,
+        volume_planning_revision,
+    )
     from chapter_paths import find_chapter_file, volume_num_for_chapter
 except ImportError:  # pragma: no cover
-    from scripts.chapter_outline_loader import volume_num_for_chapter_from_state
+    from scripts.chapter_outline_loader import (
+        chapter_outline_revision,
+        chapter_planned_source_revision,
+        find_chapter_outline_file,
+        volume_num_for_chapter_from_state,
+        volume_planning_revision,
+    )
     from scripts.chapter_paths import find_chapter_file, volume_num_for_chapter
 
 from .projection_log import latest_projection_run, projection_status_from_run
+from .chapter_reloading import body_evidence, upstream_body_blockers
 
 
 PHASE_NO_PROJECT = "no_project"
@@ -97,6 +110,7 @@ class ProjectPhaseSnapshot:
     phase: str
     target_chapter: int
     latest_accepted_chapter: int
+    target_volume: int = 0
     latest_commit: ChapterCommitInfo | None = None
     state_current_chapter: int = 0
     missing_init_files: tuple[str, ...] = ()
@@ -106,6 +120,16 @@ class ProjectPhaseSnapshot:
     draft_file: str = ""
     blocking: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+    chapter_outline_file: str = ""
+    chapter_outline_source: str = "missing"
+    chapter_outline_revision: str = ""
+    volume_planning_revision: str = ""
+    volume_plan_stale: bool = False
+    chapter_contract_stale: bool = False
+    body_revision_stale: bool = False
+    body_revision_uncommitted: bool = False
+    body_evidence: dict[str, Any] = field(default_factory=dict)
+    upstream_body_stale: tuple[int, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -113,6 +137,7 @@ class ProjectPhaseSnapshot:
             "phase": self.phase,
             "target_chapter": self.target_chapter,
             "latest_accepted_chapter": self.latest_accepted_chapter,
+            "target_volume": self.target_volume,
             "latest_commit": self.latest_commit.to_dict() if self.latest_commit else None,
             "state_current_chapter": self.state_current_chapter,
             "missing_init_files": list(self.missing_init_files),
@@ -122,6 +147,16 @@ class ProjectPhaseSnapshot:
             "draft_file": self.draft_file,
             "blocking": list(self.blocking),
             "warnings": list(self.warnings),
+            "chapter_outline_file": self.chapter_outline_file,
+            "chapter_outline_source": self.chapter_outline_source,
+            "chapter_outline_revision": self.chapter_outline_revision,
+            "volume_planning_revision": self.volume_planning_revision,
+            "volume_plan_stale": self.volume_plan_stale,
+            "chapter_contract_stale": self.chapter_contract_stale,
+            "body_revision_stale": self.body_revision_stale,
+            "body_revision_uncommitted": self.body_revision_uncommitted,
+            "body_evidence": self.body_evidence,
+            "upstream_body_stale": list(self.upstream_body_stale),
         }
 
 
@@ -278,6 +313,52 @@ def contract_files_for_chapter(project_root: Path, chapter: int) -> dict[str, Pa
     }
 
 
+def _chapter_outline_evidence(project_root: Path, chapter: int) -> tuple[str, str, str]:
+    if chapter <= 0:
+        return "", "missing", ""
+    try:
+        path, source = find_chapter_outline_file(project_root, chapter)
+    except (OSError, UnicodeError):
+        return "", "missing", ""
+    if path is None or not path.is_file():
+        return "", "missing", ""
+    try:
+        if not path.read_text(encoding="utf-8").strip():
+            return "", "missing", ""
+    except (OSError, UnicodeError):
+        return "", "missing", ""
+    return str(path), source, chapter_outline_revision(project_root, chapter)
+
+
+def _volume_artifacts_exist(project_root: Path, volume: int) -> bool:
+    outline_dir = project_root / "大纲"
+    return all(
+        (outline_dir / pattern.format(volume=volume)).is_file()
+        and bool((outline_dir / pattern.format(volume=volume)).read_text(encoding="utf-8").strip())
+        for pattern in (
+            "第{volume}卷-节拍表.md",
+            "第{volume}卷-时间线.md",
+            "第{volume}卷-详细大纲.md",
+        )
+    )
+
+
+def _contracts_stale(project_root: Path, chapter: int, outline_file: str) -> bool:
+    if not outline_file or chapter <= 0:
+        return False
+    outline_path = Path(outline_file)
+    try:
+        outline_mtime = outline_path.stat().st_mtime_ns
+    except OSError:
+        return True
+    contracts = contract_files_for_chapter(project_root, chapter).values()
+    try:
+        contract_mtimes = [path.stat().st_mtime_ns for path in contracts]
+    except OSError:
+        return False
+    return bool(contract_mtimes) and outline_mtime > min(contract_mtimes)
+
+
 def missing_contract_files(project_root: Path, chapter: int) -> tuple[str, ...]:
     if chapter <= 0:
         return tuple(str(path.relative_to(project_root)) for path in contract_files_for_chapter(project_root, 1).values())
@@ -347,13 +428,41 @@ def resolve_project_phase(project_root: str | Path | None, chapter: int | None =
     artifacts_missing = missing_commit_artifacts(root)
     draft_path = find_chapter_file(root, target) if target > 0 else None
     draft_file = str(draft_path) if draft_path else ""
+    chapter_outline_file, chapter_outline_source, outline_revision = _chapter_outline_evidence(root, target)
+    target_volume = _volume_num(root, target) if target > 0 else 0
+    volume_revision = volume_planning_revision(root, target_volume) if target_volume else ""
+    volume_artifacts_exist = _volume_artifacts_exist(root, target_volume) if target_volume else False
+    source_volume_revision = chapter_planned_source_revision(root, target)
+    volume_plan_stale = bool(
+        volume_revision
+        and source_volume_revision
+        and volume_revision != source_volume_revision
+    )
+    chapter_contract_stale = (
+        _contracts_stale(root, target, chapter_outline_file) if not contract_missing else False
+    ) or volume_plan_stale
 
+    body = body_evidence(root, target) if target > 0 else {}
+    try:
+        upstream_stale = tuple(upstream_body_blockers(root, target)) if target > 0 else ()
+    except (OSError, ValueError, TypeError, AttributeError):
+        upstream_stale = ()
     warnings: list[str] = []
     blocking: list[str] = []
+    if body.get("body_revision_stale"):
+        blocking.append("chapter_body_stale")
+    if upstream_stale:
+        blocking.append("previous_chapter_revision_changed")
     if state_error:
         blocking.append(f"state_json_{state_error}")
     if state_chapter > latest_accepted:
         warnings.append("state_projection_ahead_of_latest_accepted_commit")
+    if volume_artifacts_exist and chapter_outline_source == "missing":
+        warnings.append("chapter_outline_missing_after_volume_plan")
+    if chapter_contract_stale:
+        warnings.append("chapter_contract_stale_after_outline_change")
+    if volume_plan_stale:
+        warnings.append("chapter_plan_stale_after_volume_change")
 
     if has_projection_blocker(latest_commit):
         phase = PHASE_PROJECTION_FAILED
@@ -367,15 +476,21 @@ def resolve_project_phase(project_root: str | Path | None, chapter: int | None =
         phase = PHASE_INIT_SCAFFOLDED
         blocking.extend([f"missing_init_dir:{rel}" for rel in init_dirs_missing])
         blocking.extend([f"missing_init_file:{rel}" for rel in init_files_missing])
+    elif body.get("body_revision_stale") or body.get("body_revision_uncommitted") or upstream_stale or body.get("dependency_stale"):
+        phase = PHASE_DRAFT_IN_PROGRESS
     elif latest_commit and latest_commit.chapter >= target and latest_commit.status in {"accepted", "rejected"}:
         phase = PHASE_CHAPTER_COMMITTED
     elif draft_file and not artifacts_missing:
         phase = PHASE_READY_TO_COMMIT
     elif draft_file:
         phase = PHASE_DRAFT_IN_PROGRESS
-    elif not contract_missing:
+    elif not contract_missing and not chapter_contract_stale and (
+        chapter_outline_source != "missing" or not volume_artifacts_exist
+    ):
         phase = PHASE_CHAPTER_CONTRACT_READY
-    elif (root / ".story-system" / "MASTER_SETTING.json").is_file() or any((root / "大纲").glob("第*卷*大纲.md")):
+    elif volume_artifacts_exist or (root / ".story-system" / "MASTER_SETTING.json").is_file() or any(
+        (root / "大纲").glob("第*卷*大纲.md")
+    ):
         phase = PHASE_PLAN_IN_PROGRESS
     else:
         phase = PHASE_INIT_READY
@@ -385,6 +500,7 @@ def resolve_project_phase(project_root: str | Path | None, chapter: int | None =
         phase=phase,
         target_chapter=target,
         latest_accepted_chapter=latest_accepted,
+        target_volume=target_volume,
         latest_commit=latest_commit,
         state_current_chapter=state_chapter,
         missing_init_files=init_files_missing,
@@ -394,4 +510,14 @@ def resolve_project_phase(project_root: str | Path | None, chapter: int | None =
         draft_file=draft_file,
         blocking=tuple(blocking),
         warnings=tuple(warnings),
+        chapter_outline_file=chapter_outline_file,
+        chapter_outline_source=chapter_outline_source,
+        chapter_outline_revision=outline_revision,
+        volume_planning_revision=volume_revision,
+        volume_plan_stale=volume_plan_stale,
+        chapter_contract_stale=chapter_contract_stale,
+        body_revision_stale=bool(body.get("body_revision_stale")),
+        body_revision_uncommitted=bool(body.get("body_revision_uncommitted")),
+        body_evidence=body,
+        upstream_body_stale=upstream_stale,
     )

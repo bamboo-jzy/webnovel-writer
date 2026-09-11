@@ -29,12 +29,15 @@
 | webnovel-plan | Step 5 | always | `templates/output/大纲-卷时间线.md` | 全文 | — |
 | webnovel-plan | Step 6 | always | `references/genre-profiles.md` | 区段 | 当前 genre 的单个 `### 2.x`；按需加 `## 一、Profile 字段说明` |
 | webnovel-plan | Step 6 | always | `references/shared/strand-weave-pattern.md` | 全文 | — |
-| webnovel-plan | 章纲拆分 | always | `references/outlining/plot-signal-vs-spoiler.md` | 全文 | — |
 | webnovel-plan | Step 6 | 需要爽点设计 | `references/shared/cool-points-guide.md` | 区段 | 所需爽点维度段；题材适配取 `## 九、题材适配` |
 | webnovel-plan | Step 6/7 | 需要冲突设计 | `skills/webnovel-plan/references/outlining/conflict-design.md` | 区段 | 对应冲突类型小节 |
-| webnovel-plan | Step 7 | 需要追读力分析 | `references/reading-power-taxonomy.md` | 区段 | 按需取 `## 一、钩子类型` / `## 二、爽点模式` / `## 三、即时满足/微兑现` |
-| webnovel-plan | Step 7 | 需要章纲细化 | `skills/webnovel-plan/references/outlining/chapter-planning.md` | 区段 | `## 10. 结构化节点规范（CBN/CPNs/CEN）`；需模板时加 `## 7. 章节规划模板` |
-| webnovel-plan | Step 6/7 | 特定题材节奏 | `skills/webnovel-plan/references/outlining/genre-volume-pacing.md` | 全文 | — |
+| webnovel-plan | Step 6 | 特定题材节奏 | `skills/webnovel-plan/references/outlining/genre-volume-pacing.md` | 全文 | — |
+| webnovel-volume-revise | Step 1/2 | always | `skills/webnovel-volume-revise/SKILL.md` | 全文 | 读取三份卷级产物、总纲、设定与状态；修改后执行 revision 重载 |
+| webnovel-chapter-plan | Step 3 | always | `skills/webnovel-plan/references/outlining/chapter-planning.md` | 区段 | `## 10. 结构化节点规范（CBN/CPNs/CEN）`；需模板时加 `## 7. 章节规划模板` |
+| webnovel-chapter-plan | Step 3 | always | `references/outlining/plot-signal-vs-spoiler.md` | 全文 | — |
+| webnovel-chapter-plan | Step 3 | 需要爽点/追读力 | `references/reading-power-taxonomy.md` / `references/shared/cool-points-guide.md` | 区段 | 按需取钩子、爽点和即时满足段 |
+| webnovel-chapter-plan | Step 3 | 需要冲突设计 | `skills/webnovel-plan/references/outlining/conflict-design.md` | 区段 | 对应冲突类型小节 |
+| webnovel-chapter-plan | Step 3 | 特定题材节奏 | `skills/webnovel-plan/references/outlining/genre-volume-pacing.md` | 全文 | — |
 | webnovel-write | Step 4 | always | `skills/webnovel-write/references/polish-guide.md` | 区段 | 主路径 `## 2. 执行顺序（必须按序）`；Anti-AI 终检 `## 2A. Anti-AI 检测细则` / `## Phase 1 增补：Anti-AI 规范（7层，原版）` |
 | webnovel-write | Step 4 | always | `skills/webnovel-write/references/writing/typesetting.md` | 全文 | — |
 | webnovel-write | Step 4 | always | `skills/webnovel-write/references/style-adapter.md` | 全文 | — |
@@ -58,7 +61,7 @@
 | webnovel-plan | 卷级规划 | always | `--skill plan --table 场景写法 --query "卷级结构 叙事功能"` |
 | webnovel-plan | 卷级规划 | 需要爽点/冲突设计 | `--skill plan --table 爽点与节奏 --query "{卷级核心冲突}" --genre "${GENRE}"` |
 | webnovel-plan | 卷级规划 | 需要桥段模板 | `--skill plan --table 桥段套路 --query "{卷级核心冲突}" --genre "${GENRE}"` |
-| webnovel-plan | 章纲拆分 | 新增角色出现 | `--skill plan --table 命名规则 --query "角色命名" --genre {题材}` |
+| webnovel-plan | 卷级规划 | 新增角色出现 | `--skill plan --table 命名规则 --query "角色命名" --genre {题材}` |
 | webnovel-write | Step 2 | 新角色首次出场 | `--skill write --table 命名规则 --query "角色命名" --genre {题材}` |
 | webnovel-write | Step 2 | 战斗/对峙场景 | `--skill write --table 场景写法 --query "战斗描写" --genre {题材}` |
 | webnovel-write | Step 2 | 多角色对话 | `--skill write --table 写作技法 --query "对话声线 口吻区分" --genre {题材}` |

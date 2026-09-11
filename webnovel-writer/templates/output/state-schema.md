@@ -26,8 +26,51 @@
     "volumes_completed": [],
     "current_volume": 1,
     "volumes_planned": [
-      {"volume": 1, "chapters_range": "1-100", "planned_at": "2026-02-01"}
-    ]
+      {
+        "volume": 1,
+        "chapters_range": "1-100",
+        "planned_at": "2026-02-01",
+        "planning_revision": "...",
+        "reload_source": "guided_plan",
+        "reloaded_at": "2026-02-01",
+        "stale_chapters": []
+      }
+    ],
+    "chapters_planned": [
+      {
+        "chapter": 1,
+        "volume": 1,
+        "outline_file": "大纲/第1章-标题.md",
+        "planned_at": "2026-09-09",
+        "updated_at": "2026-09-09",
+        "source_volume_revision": "...",
+        "status": "planned",
+        "stale_reason": "",
+        "stale_at": ""
+      }
+    ],
+    "chapter_revisions": {
+      "0001": {
+        "content_revision": "sha256...",
+        "draft_revision": "sha256...",
+        "validated_revision": "sha256...",
+        "committed_revision": "sha256...",
+        "content_status": "committed",
+        "validation_input": {
+          "chapter": 1,
+          "content_revision": "sha256...",
+          "contract_revision": "sha256...",
+          "validation_id": "..."
+        },
+        "artifact_digest": "sha256...",
+        "stale_reason": "",
+        "stale_dependencies": {},
+        "reload_source": "manual_reload",
+        "reloaded_at": "",
+        "validated_at": ""
+      }
+    },
+    "chapter_status": {}
   },
   "protagonist_state": {
     "name": "",

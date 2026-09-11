@@ -43,3 +43,52 @@ def test_update_state_cli_add_review_writes_checkpoint(tmp_path, monkeypatch):
     assert checkpoints[-1]["chapters"] == "1-2"
     assert checkpoints[-1]["report"] == report_file
 
+
+def test_mark_chapter_planned_adds_entry_with_volume_revision():
+    import update_state as update_state_module
+
+    updater = update_state_module.StateUpdater("unused")
+    updater.state = {"progress": {}}
+
+    updater.mark_chapter_planned(3, "大纲/第3章-转折.md", 1, "volume-rev-1")
+
+    planned = updater.state["progress"]["chapters_planned"]
+    assert planned == [
+        {
+            "chapter": 3,
+            "volume": 1,
+            "outline_file": "大纲/第3章-转折.md",
+            "planned_at": planned[0]["planned_at"],
+            "updated_at": planned[0]["updated_at"],
+            "source_volume_revision": "volume-rev-1",
+        }
+    ]
+
+
+def test_mark_chapter_planned_updates_existing_entry_without_duplicate():
+    import update_state as update_state_module
+
+    updater = update_state_module.StateUpdater("unused")
+    updater.state = {
+        "progress": {
+            "chapters_planned": [
+                {
+                    "chapter": 2,
+                    "volume": 1,
+                    "outline_file": "旧路径",
+                    "planned_at": "2026-01-01",
+                    "updated_at": "2026-01-01",
+                    "source_volume_revision": "old",
+                }
+            ]
+        }
+    }
+
+    updater.mark_chapter_planned(2, "大纲/第2章-修订.md", 1, "new")
+
+    planned = updater.state["progress"]["chapters_planned"]
+    assert len(planned) == 1
+    assert planned[0]["outline_file"] == "大纲/第2章-修订.md"
+    assert planned[0]["source_volume_revision"] == "new"
+    assert planned[0]["planned_at"] == "2026-01-01"
+

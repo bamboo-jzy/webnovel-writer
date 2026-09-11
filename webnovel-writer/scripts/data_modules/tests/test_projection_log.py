@@ -13,6 +13,8 @@ def _ensure_scripts_on_path() -> None:
 
 _ensure_scripts_on_path()
 
+from .test_chapter_reloading import install_projection_fixture
+
 from data_modules.chapter_commit_service import ChapterCommitService  # noqa: E402
 from data_modules.projection_log import (  # noqa: E402
     append_projection_run,
@@ -101,6 +103,7 @@ def test_chapter_commit_service_writes_projection_log(tmp_path):
         extraction_result={"state_deltas": [], "entity_deltas": [], "accepted_events": []},
     )
 
+    install_projection_fixture(tmp_path, payload)
     service.apply_projections(payload)
 
     runs = read_projection_runs(tmp_path, chapter=7)
@@ -144,6 +147,7 @@ def test_chapter_commit_service_marks_vector_store_zero_as_failed(monkeypatch, t
         },
     )
 
+    install_projection_fixture(tmp_path, payload)
     projected = service.apply_projections(payload)
 
     assert projected["projection_status"]["vector"] == "failed:store_failed"

@@ -72,6 +72,8 @@ hook_strength: "strong"
 
 三份 artifact 的顶层结构如下。投影器只认规范字段名，必须严格遵守。
 
+三份 artifact 均须在顶层包含 `source`，原样携带调用方在读取正文前提供的 `validation_input`（chapter/content_revision/contract_revision/validation_id）。读取前后核对正文 SHA-256，发生变化立即阻断；不得给旧 artifact 补写当前 hash 冒充重新提取。修订历史章时，从该章之前的 accepted commits 核对前置事实，不把聚合 state/index 中本章旧事实或后续事实当作前置状态。
+
 - `fulfillment_result.json` 顶层四个数组：`planned_nodes`、`covered_nodes`、`missed_nodes`、`extra_nodes`。
 - `disambiguation_result.json` 顶层：`pending` 数组。
 - `extraction_result.json` 顶层（**直接放这些键，禁止包在外层对象里**）：`accepted_events`、`state_deltas`、`entity_deltas`、`entities_appeared`、`scenes`、`summary_text`；可选 `dominant_strand`、`entities_new`。

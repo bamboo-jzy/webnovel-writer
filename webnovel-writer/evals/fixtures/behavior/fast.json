@@ -22,11 +22,68 @@
       "id": "skill_plan_contract",
       "type": "skill_contract",
       "skill": "webnovel-plan",
-      "description": "/webnovel-plan preserves outline blockers and Story System runtime contract refresh.",
+      "description": "/webnovel-plan preserves outline blockers while producing volume-only planning artifacts.",
       "required": [
         "若发现总纲与设定冲突，先阻断",
         "placeholder-scan",
         "story-system"
+      ]
+    },
+    {
+      "id": "skill_chapter_plan_contract",
+      "type": "skill_contract",
+      "skill": "webnovel-chapter-plan",
+      "description": "/webnovel-chapter-plan creates independent chapter outlines before refreshing chapter contracts.",
+      "required": [
+        "大纲/第N章-标题.md",
+        "CBN",
+        "CPNs",
+        "CEN",
+        "story-system",
+        "--emit-runtime-contracts",
+        "--chapter-planned"
+      ]
+    },
+    {
+      "id": "skill_volume_revise_contract",
+      "type": "skill_contract",
+      "skill": "webnovel-volume-revise",
+      "description": "/webnovel-volume-revise confirms impact before editing and reloads the volume revision afterward.",
+      "required": [
+        "修改前先备份",
+        "作者确认",
+        "volume-reload",
+        "不得自动覆盖独立章纲",
+        "stale"
+      ]
+    },
+    {
+      "id": "volume_reload_contract",
+      "type": "skill_contract",
+      "skill": "webnovel-volume-reload",
+      "description": "Manual volume outline edits require explicit revision reload and stale propagation.",
+      "required": [
+        "--volume",
+        "--dry-run",
+        "--backup-only",
+        "manual_reload",
+        "stale"
+      ]
+    },
+    {
+      "id": "skill_chapter_reload_contract",
+      "type": "skill_contract",
+      "skill": "webnovel-chapter-reload",
+      "description": "Manual body edits require revision-bound reload, validation, and explicit commit confirmation.",
+      "required": [
+        "chapter-reload",
+        "--dry-run",
+        "--validate",
+        "validation_input",
+        "revision_projection_unsafe",
+        "expected-previous",
+        "不覆盖人工正文",
+        "previous_chapter_revision_changed"
       ]
     },
     {

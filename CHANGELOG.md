@@ -2,6 +2,29 @@
 
 这里记录每个正式版本对作者和维护者的影响。发布说明优先面向中文网文作者：先说写作体验有什么变化，再补维护者关心的技术细节。
 
+## v6.5.0 - 最低 Python 版本提升到 3.12
+
+发版范围：`v6.4.0..v6.5.0`。
+
+### 给作者看的变化
+
+- **最低 Python 版本从 3.10 提升到 3.12**。插件及其脚本现在要求 **Python 3.12 或更高**；3.10 / 3.11 不再支持，也不再进入 CI 测试。如果你的环境还停留在 3.10 / 3.11，请在升级插件前先升级 Python。低于 3.12 时 `doctor` 会明确报 blocker（`python.version`）并给出升级提示，而不是让你在别处以奇怪的方式失败。
+
+### 是否需要改旧项目
+
+书项目数据无需迁移；只需保证运行插件的 Python ≥ 3.12。
+
+### 给维护者
+
+- 起因：`Python Test Matrix` 长期红（3.10/3.11 全挂、3.12 过）。根因是 `scripts/conftest.py` 的 `_SafeTemporaryDirectory` 把 **Python 3.12 才有的 `delete=`** 参数透传给父类 → 3.10/3.11 上每次 `tempfile.TemporaryDirectory()` 实例化即 `TypeError` → 收集阶段 37 个测试模块报错 → pytest `exit code 2`（Interrupted，不是用例失败）。真机 3.11.9 实测：修复前 `37 errors / EXIT=2`，修复后 `1012 collected / EXIT=0`。
+- 处置：最低版本提升到 3.12 后，该缺陷不出现在受支持版本上；`conftest.py` 仍保留 `_TEMPDIR_SUPPORTS_DELETE = sys.version_info >= (3, 12)` 门控，使旧解释器上不至于以「收集中断」的形态失败，便于诊断。
+- 测试矩阵：`.github/workflows/test-matrix.yml` 的 `python` 改为 `['3.12', '3.13', '3.14']`（Ubuntu + Windows 共 6 个 job），删除 `exclude: windows + 3.10`。
+- **新增独立 job `quality`**（Ubuntu + 3.12）：把 `run_behavior_evals.py` 与 `validate_plugin_package.py` 从矩阵 job 中拆出。原先这两步的 `if` 绑在 `ubuntu-latest + 3.11` 上，而该 job 在更早的 pytest 步就失败 → 它们在 CI 里**从未真正执行过**。
+- 版本声明同步改动：`scripts/requirements.txt`、`README.md` 徽章、`docs/operations/operations.md`；运行时门控收敛到 `doctor.py` 的 `_MIN_PYTHON = (3, 12)` 一处，不再散落 5 个字面量。
+- `plugin-release.yml` 与 `plugin-version.yml` 自身使用的解释器从 3.11 升到 3.12。
+- 已知未处理：Windows 侧 `run_tests.ps1` 的临时目录预检失败时，其 stderr 被 `2>$null` 丢弃 → `exit code 1` 无法区分「预检失败」与「用例失败」，失败原因不可见。
+- 安装指令改为从本仓库安装（`README.md` 与 `webnovel-writer/README.md` 的 `marketplace add` / `pip install -r` 两处）：`lingfengQAQ` → `bamboo-jzy`。注意 `plugin.json` / `marketplace.json` 的 `author` 与 `homepage` / `repository` 仍指向上游，属署名与项目主页，未随安装源改动。
+
 ## v6.4.0 - 一章不要了，直接抛弃
 
 发版范围：`v6.3.0..v6.4.0`。

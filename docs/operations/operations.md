@@ -255,7 +255,7 @@ python -X utf8 webnovel-writer/scripts/run_behavior_evals.py --format text
 python -X utf8 webnovel-writer/scripts/validate_plugin_package.py --format text
 ```
 
-CI 覆盖 Ubuntu Python 3.10/3.11/3.12 和 Windows Python 3.11/3.12；Windows 脚本执行 UTF-8 与临时目录预检。完整 pytest 包含中文带空格路径、多进程账本/日志写入、原子替换失败、真实 accepted commit→projection→backup/resume 和损坏阻断 fixture，不调用真实 LLM 或网络 API。
+CI 覆盖 Ubuntu 与 Windows 的 Python 3.12/3.13/3.14（**最低支持版本为 3.12**）；Windows 脚本执行 UTF-8 与临时目录预检。行为评测与插件包校验在独立的 `quality` job 上运行（Ubuntu + 3.12），不依赖测试矩阵的成败。完整 pytest 包含中文带空格路径、多进程账本/日志写入、原子替换失败、真实 accepted commit→projection→backup/resume 和损坏阻断 fixture，不调用真实 LLM 或网络 API。
 
 `run_behavior_evals.py` 是快速行为契约检查，不等同于端到端测试；`validate_plugin_package.py` 按 plugin-dev 思路检查 manifest、Skill / Agent frontmatter、hooks wrapper、README 版本和路径可移植性。
 

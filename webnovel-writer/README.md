@@ -53,7 +53,7 @@ Reviewer 不评分、不评价文笔、不建议情节改动；爽点、节奏�
 通过 Claude Code Marketplace 安装（推荐）：
 
 ```bash
-claude plugin marketplace add lingfengQAQ/webnovel-writer --scope user
+claude plugin marketplace add bamboo-jzy/webnovel-writer --scope user
 claude plugin install webnovel-writer@webnovel-writer-marketplace --scope user
 ```
 

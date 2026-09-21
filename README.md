@@ -1,8 +1,8 @@
 # Webnovel Writer
 
 [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-6.4.0-brightgreen.svg)](.claude-plugin/marketplace.json)
-[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
+[![Version](https://img.shields.io/badge/version-6.5.0-brightgreen.svg)](.claude-plugin/marketplace.json)
+[![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-Compatible-purple.svg)](https://claude.ai/claude-code)
 [![Marketplace](https://img.shields.io/badge/Claude%20Code-Marketplace-black.svg)](.claude-plugin/marketplace.json)
 
@@ -107,7 +107,7 @@ v6.0.0 的默认主链叫 **Story System**，几个关键角色：
 通过 Claude Code Marketplace 安装：
 
 ```bash
-claude plugin marketplace add lingfengQAQ/webnovel-writer --scope user
+claude plugin marketplace add bamboo-jzy/webnovel-writer --scope user
 claude plugin install webnovel-writer@webnovel-writer-marketplace --scope user
 ```
 
@@ -118,7 +118,7 @@ claude plugin install webnovel-writer@webnovel-writer-marketplace --scope user
 ### 2. 安装 Python 依赖
 
 ```bash
-python -m pip install -r https://raw.githubusercontent.com/lingfengQAQ/webnovel-writer/HEAD/requirements.txt
+python -m pip install -r https://raw.githubusercontent.com/bamboo-jzy/webnovel-writer/HEAD/requirements.txt
 ```
 
 ### 3. 初始化一本书
@@ -390,7 +390,8 @@ git push origin feature/your-feature
 
 | 版本 | 主要变化 |
 |------|----------|
-| **v6.4.0 (当前)** | 一章不要了，直接抛弃 |
+| **v6.5.0 (当前)** | 最低 Python 版本提升到 3.12 |
+| **v6.4.0** | 一章不要了，直接抛弃 |
 | **v6.3.0** | 文风有档案，漏章藏不住，已定稿的事实也能改 |
 | **v6.2.1** | 修复 Windows 写章提交偶发的拒绝访问（WinError 5）：资料文件被短暂占用时自动重试 |
 | **v6.2.0** | 写章结果更清楚，失败后更好恢复 |

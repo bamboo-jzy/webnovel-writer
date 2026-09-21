@@ -41,11 +41,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # 最低支持版本为 3.12（见 scripts/requirements.txt）；不再测试 3.10/3.11。
         os: [ubuntu-latest, windows-latest]
-        python: ['3.10', '3.11', '3.12']
-        exclude:
-          - os: windows-latest
-            python: '3.10'
+        python: ['3.12', '3.13', '3.14']
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -68,10 +66,28 @@ jobs:
         shell: pwsh
         run: ./webnovel-writer/scripts/run_tests.ps1 -Mode full
 
+  # 行为评测与包校验独立成 job：不再挂在某个矩阵 job 之后。
+  # 原先它们的 if 条件绑在 ubuntu+3.11 上，而那个 job 在 pytest 步就失败，
+  # 导致这两步在 CI 里从未真正执行过。
+  quality:
+    name: Behavior evals & package validation
+    runs-on: ubuntu-latest
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
       - name: Run behavior evals
-        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.11'
         run: python webnovel-writer/scripts/run_behavior_evals.py --format text
 
       - name: Validate plugin package
-        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.11'
         run: python webnovel-writer/scripts/validate_plugin_package.py --format text

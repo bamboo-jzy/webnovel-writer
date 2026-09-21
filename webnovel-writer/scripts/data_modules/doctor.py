@@ -708,17 +708,23 @@ def _projection_log_checks(project_root: Path, snapshot: ProjectPhaseSnapshot) -
     ]
 
 
+# 项目最低支持版本；与 scripts/requirements.txt、README 徽章保持一致。
+_MIN_PYTHON = (3, 12)
+
+
 def _python_checks() -> list[dict[str, Any]]:
+    version_ok = sys.version_info >= _MIN_PYTHON
+    minimum = f"{_MIN_PYTHON[0]}.{_MIN_PYTHON[1]}"
     checks = [
         _check(
             "python.version",
-            status=CHECK_OK if sys.version_info >= (3, 10) else CHECK_ERROR,
-            severity="info" if sys.version_info >= (3, 10) else "blocker",
+            status=CHECK_OK if version_ok else CHECK_ERROR,
+            severity="info" if version_ok else "blocker",
             message="python version",
-            expected=">= 3.10",
+            expected=f">= {minimum}",
             actual=platform.python_version(),
-            impact="" if sys.version_info >= (3, 10) else "运行时依赖 Python 3.10+ 语法和库行为。",
-            repair="" if sys.version_info >= (3, 10) else "切换到 Python 3.10 或更高版本。",
+            impact="" if version_ok else f"运行时依赖 Python {minimum}+ 语法和库行为。",
+            repair="" if version_ok else f"切换到 Python {minimum} 或更高版本。",
         )
     ]
     for module_name in ("aiohttp", "filelock", "pydantic"):

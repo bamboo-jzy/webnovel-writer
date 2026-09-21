@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import sqlite3
+import sys
 import tempfile
 import uuid
 from pathlib import Path
@@ -52,15 +53,26 @@ def _install_safe_tempfile() -> None:
     tempfile.TemporaryDirectory = _SafeTemporaryDirectory
 
 
+# 项目最低支持 Python 3.12（见 scripts/requirements.txt）；tempfile.TemporaryDirectory
+# 的 delete 参数也恰好是 3.12 才引入的。这里保留版本门控，是为了在更旧的解释器上
+# 也不至于「每次实例化都抛 TypeError: unexpected keyword argument 'delete'」——
+# 那会让数十个测试模块在收集阶段就报错，pytest 以 exit code 2（Interrupted）中断整轮，
+# 把真正的兼容问题一起掩盖掉。
+_TEMPDIR_SUPPORTS_DELETE = sys.version_info >= (3, 12)
+
+
 class _SafeTemporaryDirectory(_ORIGINAL_TEMPORARY_DIRECTORY):
     def __init__(self, suffix=None, prefix=None, dir=None, ignore_cleanup_errors=True, *, delete=True):
-        super().__init__(
-            suffix=suffix,
-            prefix=prefix,
-            dir=dir,
-            ignore_cleanup_errors=ignore_cleanup_errors,
-            delete=delete,
-        )
+        kwargs = {
+            "suffix": suffix,
+            "prefix": prefix,
+            "dir": dir,
+            "ignore_cleanup_errors": ignore_cleanup_errors,
+        }
+        if _TEMPDIR_SUPPORTS_DELETE:
+            kwargs["delete"] = delete
+        # 旧解释器没有 delete 能力：忽略该参数，行为等同 3.12+ 的默认值（真的删）。
+        super().__init__(**kwargs)
 
 
 def _safe_sqlite_connect(*args, **kwargs):

@@ -497,3 +497,47 @@ class TestLoadContextAuthorStyle:
         )
         pack = MemoryContractAdapter(cfg).load_context(chapter=2)
         assert "author_style_patterns" not in pack.sections
+
+    def _write_style_profile(self, tmp_path: Path, payload) -> None:
+        path = tmp_path / ".webnovel" / "style_profile.json"
+        if isinstance(payload, str):
+            path.write_text(payload, encoding="utf-8")
+        else:
+            path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    def test_style_profile_digest_present(self, tmp_path):
+        cfg = _make_project(tmp_path)
+        self._write_style_profile(
+            tmp_path,
+            {
+                "schema_version": "style-profile/v1",
+                "injection_digest": "目标：平均句长 11 字；现状：17 字，偏长。",
+                "observed": {"label": "observed"},
+            },
+        )
+        pack = MemoryContractAdapter(cfg).load_context(chapter=2)
+        assert "平均句长 11 字" in str(pack.sections.get("style_profile", ""))
+
+    def test_style_profile_absent_section_omitted(self, tmp_path):
+        cfg = _make_project(tmp_path)
+        pack = MemoryContractAdapter(cfg).load_context(chapter=2)
+        assert "style_profile" not in pack.sections
+        assert "style_contract" not in pack.sections
+
+    def test_style_profile_malformed_does_not_crash(self, tmp_path):
+        cfg = _make_project(tmp_path)
+        self._write_style_profile(tmp_path, "{broken json")
+        pack = MemoryContractAdapter(cfg).load_context(chapter=2)
+        assert "style_profile" not in pack.sections
+
+    def test_style_profile_digest_truncated(self, tmp_path):
+        cfg = _make_project(tmp_path)
+        self._write_style_profile(tmp_path, {"injection_digest": "句式" * 2000})
+        pack = MemoryContractAdapter(cfg).load_context(chapter=2)
+        assert len(pack.sections["style_profile"]) <= 1500
+
+    def test_style_profile_missing_digest_key_omitted(self, tmp_path):
+        cfg = _make_project(tmp_path)
+        self._write_style_profile(tmp_path, {"schema_version": "style-profile/v1"})
+        pack = MemoryContractAdapter(cfg).load_context(chapter=2)
+        assert "style_profile" not in pack.sections

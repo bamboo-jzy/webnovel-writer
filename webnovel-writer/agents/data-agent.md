@@ -31,7 +31,7 @@ chapter-commit 由写章主流程运行，data-agent 不在此执行（见 §5 �
 
 **C 生成 artifacts**：产出三份 JSON 到 `.webnovel/tmp/`，顶层结构见 §7。
 
-**D 摘要与场景切片**：写入 `extraction_result.json` 的 `summary_text` 与 `scenes` 字段。摘要 100-150 字，场景切片 50-100 字/场景，字段为 `index/start_line/end_line/location/summary/characters/content`。
+**D 摘要与场景切片**：写入 `extraction_result.json` 的 `summary_text` 与 `scenes` 字段。摘要 100-150 字，场景切片 50-100 字/场景，字段为 `index/start_line/end_line/location/summary/characters/content`。`index` 是**本章内**的场景序号，**从 1 开始递增（1 基）**，不得从 0 开始、不得重复（0 是向量块表示"章节级"的保留值，且索引表有 `UNIQUE(chapter, scene_index)` 约束）。
 
 ```markdown
 ---

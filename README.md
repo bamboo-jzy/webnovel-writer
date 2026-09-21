@@ -1,7 +1,7 @@
 # Webnovel Writer
 
 [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-6.2.1-brightgreen.svg)](.claude-plugin/marketplace.json)
+[![Version](https://img.shields.io/badge/version-6.3.0-brightgreen.svg)](.claude-plugin/marketplace.json)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-Compatible-purple.svg)](https://claude.ai/claude-code)
 [![Marketplace](https://img.shields.io/badge/Claude%20Code-Marketplace-black.svg)](.claude-plugin/marketplace.json)
@@ -58,23 +58,28 @@ Webnovel Writer 用业余时间维护。如果它帮你省下了梳理设定、�
 | 能力 | 命令 | 说明 |
 |------|------|------|
 | 深度初始化 | `/webnovel-init` | 分阶段问答，帮你把书的骨架、设定集、总纲和初始状态搭起来 |
+| 总纲修改 | `/webnovel-outline-revise` | 以已发布章节为冻结线，确认式修改总纲；推翻已发布事实的诉求只阻断提示 |
 | 卷纲规划 | `/webnovel-plan` | 基于总纲生成卷级节拍表、时间线和纯卷纲，并写回新增设定 |
 | 卷纲修改 | `/webnovel-volume-revise` | 先分析并确认影响，再定向修改卷纲、备份并刷新 revision |
 | 卷纲重载 | `/webnovel-volume-reload` | 人工编辑卷纲后重算 revision，并标记依赖章节为 stale |
 | 章纲规划 | `/webnovel-chapter-plan` | 基于卷纲按批次生成独立章纲，校验承接并刷新章级 Story System 合同 |
+| 章纲修改 | `/webnovel-chapter-revise` | 先分析并确认影响，再定向修改章纲、备份并刷新章级合同与 revision |
 | 章节创作 | `/webnovel-write` | 一条龙写完一章：备上下文、起草、审查、润色、记录事实、自动备份 |
 | 正文重载 | `/webnovel-chapter-reload` | 人工修改正文后按内容 revision 备份、重新校验 artifacts，并在确认后提交 |
-| 质量审查 | `/webnovel-review` | 从爽点、一致性、节奏、OOC、连贯性、追读力等维度审查章节 |
+| 事实审查 | `/webnovel-review` | 章节事实一致性与逻辑审查：设定、时间线、叙事连贯、角色一致性与逻辑五维 |
 | 状态查询 | `/webnovel-query` | 查询角色、伏笔、节奏、实体关系和运行时信息 |
 | 项目学习 | `/webnovel-learn` | 把这本书里好用的写法记下来，存进项目长期记忆 |
+| 文风学习 | `/webnovel-style-learn` | 从正文学现状、从 `文风/` 学目标，产出可复用的文风档案 |
 | 可视化面板 | `/webnovel-dashboard` | 只读浏览项目状态、实体图谱、章节内容和追读力数据 |
 | 项目体检 | `/webnovel-doctor` | 阶段感知检查目录、文件、数据库、RAG、依赖和 Dashboard 产物 |
 
 ## 系统长什么样
 
+`reviewer` 只做 setting / timeline / continuity / character / logic 五维事实检查，不评分、不评价文笔、不建议情节改动；爽点、节奏和追读力数据仍可供规划与写作上下文使用，但不代表完整编辑质量审查。
+
 ```mermaid
 flowchart LR
-    User[作者 / Claude Code] --> Skills[12 个 Skill 命令]
+    User[作者 / Claude Code] --> Skills[16 个 Skill 命令]
     Skills --> Agents[Context / Reviewer / Data / Deconstruction Agent]
     Agents --> Story[.story-system 合同与提交链]
     Story --> Commit[accepted CHAPTER_COMMIT]
@@ -132,8 +137,12 @@ project-root/
 ├── 正文/                  # 章节正文
 ├── 大纲/                  # 总纲、卷纲、时间线和章纲
 ├── 设定集/                # 世界观、角色、力量体系等设定
+├── 文风/                  # 要模仿的参考文本 + 文风档案.md（/webnovel-style-learn）
 └── 审查报告/              # 章节审查报告
 ```
+
+> **一个工作区一本书。** 书目录可以直接就是工作区根，也可以是工作区下唯一的那个书目录。
+> 同一工作区里放多本书会让所有命令无法判断该操作哪一本，请把每本书放在自己的工作区。
 
 ### 4. 配置 RAG
 
@@ -183,13 +192,36 @@ Dashboard 是个只读面板，能看项目状态、实体关系图、章节内�
 2. 刷新本章 runtime contract
 3. 调用 `context-agent` 生成写作任务书
 4. 根据任务书起草正文
-5. 调用 `reviewer` 做多维审查，blocking issue 不通过则阻断
+5. 调用 `reviewer` 做五维事实一致性与逻辑审查，blocking issue 不通过则阻断
 6. 润色、排版、Anti-AI 终检
 7. 调用 `data-agent` 提取事实
 8. 生成 `CHAPTER_COMMIT`，驱动 state、index、summary、memory、vector 投影
 9. 执行章节级备份
 
 这么设计，是为了把“怎么写”和“写了什么”分开：文笔和节奏可以放开发挥，但发生过的事实必须登记、过审、存档，不能含糊。
+
+### 版本证据、履约和下游 stale
+
+每个章节的可信输入由同一份 revision evidence 解释：`volume_plan_revision`、`chapter_outline_revision`、`contract_revision`、`body_content_revision` 和 `previous_chapter_revision`。这些 revision 都由文件内容或 accepted commit 计算，不用文件修改时间判断新鲜度；正文 revision 直接来自正文内容 SHA-256。
+
+正文与章纲不一致时，系统不会替作者猜测哪一边正确。履约 artifact 只报告 `fulfilled`、`partial`、`missed`、`contradicted`、`not_applicable` 等事实；未决偏离进入 `needs_reconcile`，只有独立、显式且绑定当前 validation input 的作者裁决，才能继续提交。前置章节 revision 变化只向后传播 `needs_review` / `previous_chapter_revision_changed` 和结构化影响原因（角色、物件、关系、地点、时间线或开放问题），不会自动改写后续正文。
+
+### 版本点与恢复
+
+每章完成后 `backup` 会把故事范围（正文、大纲、设定集、`.story-system/` 和允许的 `.webnovel` read-model）提交并打上 `chNNNN` 版本点 tag，所以任意章节都能回去。`chNNNN` 始终指向"该章最新已备份状态"：同章重写或修订后再次备份时 tag 只会前移，旧状态自动留成 `chNNNN-prev-<时间戳>`，历史提交不会丢。恢复用 Git 原生命令，插件不接管回退：
+
+```bash
+git log --oneline ch0030..HEAD              # 第 30 章之后有哪些提交
+git diff --stat ch0030 HEAD                 # 再看会改哪些文件
+git switch -c rewrite-from-ch0030 ch0030    # 工作树整体回到第 30 章，另开分支，历史不动
+```
+
+用 `git switch -c <分支> <tag>` 而不是 `git checkout <tag> -- 目录...`：后者一旦某个目录不存在就整体报错、什么都不恢复，也不会删除第 30 章之后新增的文件。切换后工作树状态与第 30 章完全一致，原分支和历史都完整保留，想放弃就 `git switch main` 回去。
+
+两个注意点：动手前 `git status --short` 必须为空（有未提交改动 `git switch` 会拒绝执行）；回到旧章后重写同一章号时，`backup` 会把 `chNNNN` 前移到新提交，被前移的旧版本点自动保留为 `chNNNN-prev-<时间戳>`（例如 `ch0031-prev-20260917T105258`）——历史提交不丢，也不需要手工删 tag，要回到某个旧状态就 `git switch -c <分支> chNNNN-prev-<时间戳>`。`backup --list` 会把历史点列在当前版本点下方。
+
+Git 不可用时 `backup` 退化为本地 `snapshot_chNNNN_*` 副本（带文件大小与 SHA-256 manifest，只保留最近 10 份），那是离线副本，恢复需要手工复制文件。
+
 
 ### 最终报告怎么看
 
@@ -224,15 +256,18 @@ Dashboard 是个只读面板，能看项目状态、实体关系图、章节内�
 | 命令 | 示例 | 用途 |
 |------|------|------|
 | `/webnovel-init` | `/webnovel-init` | 初始化新书项目 |
+| `/webnovel-outline-revise` | `/webnovel-outline-revise 把结局改为大团圆` | 以冻结线为界确认式修改总纲 |
 | `/webnovel-plan` | `/webnovel-plan 1` | 生成第 1 卷的卷级节拍表、时间线和纯卷纲 |
 | `/webnovel-volume-revise` | `/webnovel-volume-revise 1` | 确认式引导修改第 1 卷卷纲 |
 | `/webnovel-volume-reload` | `/webnovel-volume-reload 1` | 人工编辑后重载卷纲 revision 并标记 stale |
 | `/webnovel-chapter-plan` | `/webnovel-chapter-plan 1 1-10` | 生成第 1 卷第 1-10 章的独立章纲与章级合同 |
+| `/webnovel-chapter-revise` | `/webnovel-chapter-revise 15 把反派出场提前` | 确认式引导修改第 15 章章纲并刷新合同 |
 | `/webnovel-chapter-reload` | `/webnovel-chapter-reload 12` | 人工修改第 12 章后重载正文 revision、重新校验并确认提交 |
 | `/webnovel-write` | `/webnovel-write 45` | 写作并提交指定章节 |
 | `/webnovel-review` | `/webnovel-review 1-5` | 审查章节范围 |
 | `/webnovel-query` | `/webnovel-query 萧炎` | 查询角色、伏笔、状态等信息 |
 | `/webnovel-learn` | `/webnovel-learn "这个钩子设计有效"` | 写入项目经验记忆 |
+| `/webnovel-style-learn` | `/webnovel-style-learn build` | 生成文风档案（现状 + 目标 + 差异） |
 | `/webnovel-dashboard` | `/webnovel-dashboard` | 启动只读可视化面板 |
 | `/webnovel-doctor` | `/webnovel-doctor --chapter 12` | 只读体检项目文件、DB、RAG 和依赖 |
 
@@ -313,6 +348,7 @@ python -X utf8 "<CLAUDE_PLUGIN_ROOT>/scripts/webnovel.py" --project-root "<PROJE
 - `.story-system/commits/chapter_XXX.commit.json` 是否存在且 accepted
 - `projection_status` 是否全部为 `done` 或 `skipped`
 - `index.db`、`summaries/`、`memory_scratchpad.json` 是否正常生成
+- `index.commit_sync` 是否为 ok（索引是否与章节提交一一对应；报缺章时按提示的 `projections replay` 重建）
 - RAG API Key 是否已写入书项目根目录的 `.env`
 
 更多运维说明见 [项目结构与运维](docs/operations/operations.md)。
@@ -342,7 +378,8 @@ git push origin feature/your-feature
 
 | 版本 | 主要变化 |
 |------|----------|
-| **v6.2.1 (当前)** | 修复 Windows 写章提交偶发的拒绝访问（WinError 5）：资料文件被短暂占用时自动重试 |
+| **v6.3.0 (当前)** | 文风有档案，漏章藏不住，已定稿的事实也能改 |
+| **v6.2.1** | 修复 Windows 写章提交偶发的拒绝访问（WinError 5）：资料文件被短暂占用时自动重试 |
 | **v6.2.0** | 写章结果更清楚，失败后更好恢复 |
 | **v6.1.0** | 插件运行时加固：新增 doctor/project-status/write-gate/projection 重放、hooks、行为 eval 与发布校验 |
 | **v6.0.0** | Story System 全链路上线（合同种子 + 运行时合同 + 章节提交 + 事件审计），补齐集成测试 |

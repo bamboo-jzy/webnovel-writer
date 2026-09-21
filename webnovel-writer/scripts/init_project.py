@@ -29,7 +29,7 @@ import re
 
 # 安全修复：导入安全工具函数
 from security_utils import sanitize_commit_message, atomic_write_json, is_git_available
-from project_locator import write_current_project_pointer
+from project_locator import detect_workspace_single_book_conflicts, write_current_project_pointer
 from genre_taxonomy import resolve_genre_input, resolve_template_stems
 
 
@@ -286,6 +286,7 @@ def init_project(
         "设定集",
         "大纲",
         "正文",
+        "文风",
         "审查报告",
     ]
     for dir_path in directories:
@@ -684,12 +685,15 @@ __pycache__/
                 print(f"Git init failed (non-fatal): {e}")
 
     # 记录工作区默认项目指针（非阻断）
+    pointer_file: Path | None = None
     try:
         pointer_file = write_current_project_pointer(project_path)
         if pointer_file is not None:
             print(f"Default project pointer updated: {pointer_file}")
     except Exception as e:
         print(f"Default project pointer update failed (non-fatal): {e}")
+
+    _warn_if_workspace_has_multiple_books(project_path, pointer_file=pointer_file)
 
     print(f"\nProject initialized at: {project_path}")
     print("Key files:")
@@ -698,6 +702,34 @@ __pycache__/
     print(" - 设定集/力量体系.md")
     print(" - 设定集/主角卡.md")
     print(" - 大纲/总纲.md")
+
+
+def _warn_if_workspace_has_multiple_books(project_path: Path, *, pointer_file: Path | None) -> None:
+    """
+    单书工作区规约：一个工作区只放一本书。
+
+    初始化本身不阻断，但工作区内已存在其它书项目时必须明确告知作者：
+    这个工作区现在是"多书"的，且工作区指针已改绑到刚创建的书。
+    """
+    try:
+        conflicts = detect_workspace_single_book_conflicts(project_path)
+        other_books = conflicts.get("other_books") or []
+        if not other_books:
+            return
+        workspace_root = conflicts.get("workspace_root") or str(project_path.parent)
+        print("")
+        print("⚠ 单书工作区规约：一个工作区只放一本书。")
+        print(f"  工作区: {workspace_root}")
+        print(f"  工作区里原有的书项目 ({len(other_books)} 本):")
+        for book in other_books:
+            print(f"   - {book}")
+        print(f"  刚创建的书项目: {project_path}")
+        print("  建议: 把新书移到自己独立的工作区，或移除不再需要的旧书。")
+        if pointer_file is not None:
+            print("  注意: 工作区指针已改绑到刚创建的书——之后在本工作区运行 /webnovel-write 等命令")
+            print("        会作用于它，而不是上面列出的旧书。")
+    except Exception as e:
+        print(f"Workspace conflict check failed (non-fatal): {e}")
 
 
 def main() -> None:

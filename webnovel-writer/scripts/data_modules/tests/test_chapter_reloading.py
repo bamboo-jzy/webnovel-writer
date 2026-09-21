@@ -9,6 +9,8 @@ from data_modules.chapter_commit_service import ChapterCommitService
 from data_modules.chapter_reloading import (
     artifact_paths, assert_artifact_freshness, body_evidence, chapter_body_revision,
     commit_identity, commit_path, read_object, reload_chapter_body, revision_entry,
+    reconcile_chapter_body, approved_reconciliation, chapter_dependency_impacts,
+    chapter_dependency_impact_records,
     validate_chapter_body,
 )
 from data_modules.project_phase import contract_files_for_chapter, resolve_project_phase
@@ -158,14 +160,44 @@ def test_revision_history_and_no_fact_replay(tmp_path, monkeypatch):
     assert body.read_text(encoding="utf-8") == "正文措辞调整，不新增事实。"
 
 
+def test_projection_refreshes_summary_without_fact_replay(tmp_path):
+    old = accepted_commit(tmp_path)
+    path = commit_path(tmp_path, 1)
+    old_bytes = path.read_bytes()
+    (tmp_path / "正文/第0001章.md").write_text("正文措辞调整。", encoding="utf-8")
+    inputs = prepare_inputs(tmp_path)
+    inputs["extraction_result"]["summary_text"] = "更新后的摘要"
+    _write_json(artifact_paths(tmp_path)["extraction_result"], inputs["extraction_result"])
+    assert validate_chapter_body(tmp_path, 1)["ok"]
+    service = ChapterCommitService(tmp_path)
+    payload = service.build_commit(chapter=1, **inputs)
+    service.persist_commit(payload, expected_previous=commit_identity(old))
+
+    assert path.read_bytes() != old_bytes
+    assert payload["provenance"]["projection_refresh"] is True
+    assert not payload["provenance"].get("projection_reuse")
+    history = tmp_path / payload["provenance"]["previous_commit"]
+    assert read_object(history) == old
+
+
 def test_changed_facts_block_revision_without_overwriting_accepted(tmp_path):
     old = accepted_commit(tmp_path)
     path = commit_path(tmp_path, 1)
     old_bytes = path.read_bytes()
     (tmp_path / "正文/第0001章.md").write_text("主角获得新物品。", encoding="utf-8")
-    inputs = prepare_inputs(tmp_path)
-    inputs["extraction_result"]["summary_text"] = "新事实摘要"
-    _write_json(artifact_paths(tmp_path)["extraction_result"], inputs["extraction_result"])
+    inputs = prepare_inputs(
+        tmp_path,
+        payloads={
+            "review_result": {"blocking_count": 0},
+            "fulfillment_result": {"planned_nodes": [], "covered_nodes": [], "missed_nodes": [], "extra_nodes": []},
+            "disambiguation_result": {"pending": []},
+            "extraction_result": {
+                "accepted_events": [],
+                "state_deltas": [{"entity_id": "主角", "field": "inventory", "old": [], "new": ["玄铁剑"]}],
+                "entity_deltas": [],
+            },
+        },
+    )
     assert validate_chapter_body(tmp_path, 1)["ok"]
     service = ChapterCommitService(tmp_path)
     with pytest.raises(ValueError, match="revision_projection_unsafe"):
@@ -189,6 +221,48 @@ def test_downstream_stale_persists_and_blocks_writing(tmp_path):
     assert resolve_project_phase(tmp_path, 1).phase != "chapter_committed"
 
 
+def test_downstream_stale_records_dependency_impact_reasons(tmp_path):
+    accepted_commit(tmp_path)
+    _write_json(tmp_path / ".story-system/chapters/chapter_002.json", {})
+    (tmp_path / "大纲" / "第2章-追踪.md").write_text("# 第2章\n主角发现石门后继续追踪。", encoding="utf-8")
+    (tmp_path / "正文" / "第0001章.md").write_text("作者修改。", encoding="utf-8")
+
+    report = reload_chapter_body(tmp_path, 1)
+
+    assert report["ok"]
+    state = read_object(tmp_path / ".webnovel/state.json")
+    impacts = revision_entry(state, 2)["dependency_impacts"]["1"]
+    assert impacts
+    assert "previous chapter 1 body revision changed" in impacts[0]
+
+
+def test_downstream_stale_records_structured_dependency_impact(tmp_path):
+    accepted_commit(
+        tmp_path,
+        payloads={
+            "review_result": {"blocking_count": 0},
+            "fulfillment_result": {"planned_nodes": [], "covered_nodes": [], "missed_nodes": [], "extra_nodes": []},
+            "disambiguation_result": {"pending": []},
+            "extraction_result": {
+                "accepted_events": [
+                    {"event_type": "artifact_obtained", "subject": "主角", "payload": {"artifact_id": "玄铁剑"}}
+                ],
+                "state_deltas": [],
+                "entity_deltas": [],
+            },
+        },
+    )
+    _write_json(tmp_path / ".story-system/chapters/chapter_002.json", {})
+    (tmp_path / "大纲" / "第2章-物件.md").write_text("# 第2章\n主角继续使用玄铁剑。", encoding="utf-8")
+    (tmp_path / "正文" / "第0001章.md").write_text("作者修改。", encoding="utf-8")
+
+    report = reload_chapter_body(tmp_path, 1)
+
+    assert report["ok"]
+    impacts = revision_entry(read_object(tmp_path / ".webnovel/state.json"), 2)["dependency_impacts"]["1"]
+    assert any("物件持有" in reason and "玄铁剑" in reason for reason in impacts)
+
+
 def test_failed_backup_preserves_state(tmp_path, monkeypatch):
     prepare_inputs(tmp_path)
     state = (tmp_path / ".webnovel/state.json").read_bytes()
@@ -205,9 +279,127 @@ def test_contract_change_requires_new_review(tmp_path):
         assert_artifact_freshness(tmp_path, 1, inputs, require_validated=True)
 
 
+
+
+def test_reconciliation_token_expires_when_artifact_changes(tmp_path):
+    inputs = prepare_inputs(tmp_path)
+    inputs["fulfillment_result"].update(
+        planned_nodes=["延后节点"], covered_nodes=[], missed_nodes=["延后节点"]
+    )
+    _write_json(artifact_paths(tmp_path)["fulfillment_result"], inputs["fulfillment_result"])
+    preview = reconcile_chapter_body(tmp_path, 1, dry_run=True)
+    assert preview["ok"]
+
+    inputs["fulfillment_result"]["missed_nodes"] = ["另一个节点"]
+    _write_json(artifact_paths(tmp_path)["fulfillment_result"], inputs["fulfillment_result"])
+    decision = reconcile_chapter_body(
+        tmp_path,
+        1,
+        decision="accepted_deviation",
+        reason="作者确认",
+        impact=[2],
+        expected_input=preview["input_token"],
+    )
+
+    assert decision["ok"] is False
+    assert "confirmation" in decision["error"]
+
+
+def test_reconciliation_record_cannot_authorize_changed_body_or_malformed_reference(tmp_path):
+    inputs = prepare_inputs(tmp_path)
+    inputs["fulfillment_result"].update(
+        planned_nodes=["延后节点"], covered_nodes=[], missed_nodes=["延后节点"]
+    )
+    _write_json(artifact_paths(tmp_path)["fulfillment_result"], inputs["fulfillment_result"])
+    preview = reconcile_chapter_body(tmp_path, 1, dry_run=True)
+    decision = reconcile_chapter_body(
+        tmp_path,
+        1,
+        decision="accepted_deviation",
+        reason="作者确认",
+        impact=[2],
+        expected_input=preview["input_token"],
+    )
+    assert decision["ok"]
+
+    (tmp_path / "正文" / "第0001章.md").write_text("正文已改变", encoding="utf-8")
+    assert approved_reconciliation(tmp_path, 1, inputs) is None
+
+    state = read_object(tmp_path / ".webnovel/state.json")
+    state["progress"]["chapter_revisions"]["1"]["reconciliation_id"] = "../outside"
+    _write_json(tmp_path / ".webnovel/state.json", state)
+    assert approved_reconciliation(tmp_path, 1, inputs) is None
+
+
 def test_legacy_commit_requires_reload_not_implicit_trust(tmp_path):
     _make_init_ready(tmp_path)
     _write_json(commit_path(tmp_path, 1), {"meta": {"chapter": 1, "status": "accepted"}})
     (tmp_path / "正文/第0001章.md").write_text("手改正文", encoding="utf-8")
     assert body_evidence(tmp_path, 1)["body_revision_stale"]
     assert not retry_projection(tmp_path, chapter=1)["ok"]
+
+
+def test_structured_dependency_impact_marks_proven_transitive_chain(tmp_path):
+    _make_init_ready(tmp_path)
+    _write_json(tmp_path / ".story-system/chapters/chapter_002.json", {})
+    _write_json(tmp_path / ".story-system/chapters/chapter_003.json", {})
+    (tmp_path / "大纲" / "第2章-物件.md").write_text("# 第2章\n主角继续使用玄铁剑。", encoding="utf-8")
+    state_path = tmp_path / ".webnovel/state.json"
+    state = read_object(state_path)
+    state.setdefault("progress", {}).setdefault("chapter_revisions", {})["3"] = {
+        "dependency_impact_records": {
+            "2": [
+                {
+                    "source_chapter": 2,
+                    "dependent_chapter": 3,
+                    "category": "artifact",
+                    "fact_key": "玄铁剑",
+                    "reason": "物件持有事实changed: 玄铁剑",
+                    "before": None,
+                    "after": [{"artifact_id": "玄铁剑"}],
+                    "direct": True,
+                    "transitive": False,
+                }
+            ]
+        }
+    }
+    _write_json(state_path, state)
+
+    records = chapter_dependency_impact_records(
+        tmp_path,
+        1,
+        [2, 3],
+        fact_diff={
+            "added": [{"category": "artifact", "key": "玄铁剑", "before": None, "after": [{"artifact_id": "玄铁剑"}], "source": {}}],
+            "removed": [],
+            "changed": [],
+        },
+    )
+
+    transitive = records["3"]
+    assert any(row["transitive"] and row["propagation_path"] == [1, 2, 3] for row in transitive)
+    assert not any(row["transitive"] for row in records["2"])
+
+
+
+    accepted_commit(
+        tmp_path,
+        payloads={
+            "review_result": {"blocking_count": 0},
+            "fulfillment_result": {"planned_nodes": [], "covered_nodes": [], "missed_nodes": [], "extra_nodes": []},
+            "disambiguation_result": {"pending": []},
+            "extraction_result": {
+                "accepted_events": [
+                    {"event_type": "artifact_obtained", "subject": "主角", "payload": {"artifact_id": "玄铁剑"}}
+                ],
+                "state_deltas": [],
+                "entity_deltas": [],
+            },
+        },
+    )
+    (tmp_path / ".story-system/chapters/chapter_002.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "大纲" / "第2章-无关.md").write_text("# 第2章\n主角走进一间空屋。", encoding="utf-8")
+
+    impacts = chapter_dependency_impacts(tmp_path, 1, [2])
+
+    assert impacts["2"] == ["previous chapter 1 body revision changed; downstream review required"]

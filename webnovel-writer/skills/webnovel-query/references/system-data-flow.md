@@ -70,7 +70,6 @@ Context Agent (读) ←→ index.db + state.json ←→ Data Agent (写)
 | `backup_manager.py` | 章节号 | 自动 Git 备份 |
 | `status_reporter.py` | 无 | 生成健康报告/伏笔紧急度 |
 | `archive_manager.py` | 无 | 归档不活跃数据 |
-| `data_modules/migrate_state_to_sqlite.py` | 项目路径 | 迁移旧 state.json 到 SQLite |
 
 ### data_modules 模块
 
@@ -81,7 +80,6 @@ Context Agent (读) ←→ index.db + state.json ←→ Data Agent (写)
 | `index_manager.py` | SQLite 索引管理（实体/别名/关系/状态变化/章节/场景） |
 | `entity_linker.py` | 别名注册与消歧 |
 | `rag_adapter.py` | 向量嵌入与语义检索 |
-| `style_sampler.py` | 风格样本提取与管理 |
 | `api_client.py` | LLM API 调用封装 |
 | `config.py` | 配置管理 |
 
@@ -115,7 +113,6 @@ Context Agent (读) ←→ index.db + state.json ←→ Data Agent (写)
    → 更新 state.json（进度/主角快照 + chapter_meta）
    → 写入 summaries/chNNNN.md（章节摘要）
    → 向量嵌入 (RAG)
-   → 风格样本评估
 
 7. Git 备份（强制）
 ```
@@ -318,16 +315,6 @@ python "${SCRIPTS_DIR}/webnovel.py" --project-root "$PROJECT_ROOT" index entity-
 </output>
 </example>
 
-<example>
-<input>迁移旧 state.json 到 SQLite</input>
-<output>
-```bash
-python "${SCRIPTS_DIR}/webnovel.py" --project-root "$PROJECT_ROOT" migrate -- --backup
-# 自动备份 state.json，迁移数据到 index.db，精简 state.json
-```
-</output>
-</example>
-
 </examples>
 
 <errors>
@@ -339,5 +326,4 @@ python "${SCRIPTS_DIR}/webnovel.py" --project-root "$PROJECT_ROOT" migrate -- --
 ❌ 使用旧版 data_modules.state_manager schema → ✅ 统一使用 entities_v3 结构
 ❌ 仍从 state.json 读取 entities_v3 → ✅ 改用 SQL 查询 index.db
 ❌ 仍写入 state.json 大数据 → ✅ 改用 SQLite 增量写入
-❌ 让 state.json 持续膨胀 → ✅ 运行迁移脚本: `python "${SCRIPTS_DIR}/webnovel.py" migrate`
 </errors>

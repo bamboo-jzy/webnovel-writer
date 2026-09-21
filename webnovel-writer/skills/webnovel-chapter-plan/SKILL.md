@@ -67,7 +67,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" pla
 
 ## Step 3：按批次生成独立章纲
 
-先读取 `${SKILL_ROOT}/../webnovel-plan/references/outlining/chapter-planning.md` 的结构化节点规范、`${SKILL_ROOT}/../../references/outlining/plot-signal-vs-spoiler.md`，再按需读取 `reading-power-taxonomy.md`、爽点、冲突和节奏参考。生成独立 Markdown 文件，标题须匹配 `第N章*.md`，推荐格式：
+先读取 `${SKILL_ROOT}/../webnovel-plan/references/outlining/chapter-planning.md` 的结构化节点规范、`${SKILL_ROOT}/../../references/outlining/plot-signal-vs-spoiler.md`；再按需读取 `${SKILL_ROOT}/../../references/reading-power-taxonomy.md`（追读力）、`${SKILL_ROOT}/../../references/shared/cool-points-guide.md`（爽点）、`${SKILL_ROOT}/../webnovel-plan/references/outlining/conflict-design.md`（冲突设计）、`${SKILL_ROOT}/../webnovel-plan/references/outlining/genre-volume-pacing.md`（题材节奏）。生成独立 Markdown 文件，标题须匹配 `第N章*.md`，推荐格式：
 
 ```markdown
 # 第N章：标题
@@ -102,6 +102,10 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" pla
 ```
 
 字段可以按题材扩展，但不能删除上述 parser 依赖字段。每章固定 1 个 `CBN`、2-4 个按时间顺序排列的 `CPNs`、1 个 `CEN`；`必须覆盖节点`最多 4 个；`本章禁区`最多 5 条且只写硬禁区。
+
+**字段内的分隔符禁令（必须遵守）**：`CBN` / `CPNs` / `CEN` / `必须覆盖节点` / `本章禁区` / `关键实体` 这六项的**单行内容里不得出现** `、` `,` `，` `；` `;` `|`——解析器会把它们当条目分隔符，导致一条被拆成多条（实测：禁区写成 5 条会被拆成 6 条而超出上限，`CPNs` 会被拆碎）。条目内需要停顿或并列时用空格或 `／`。`关键实体` 用 `；` 分隔条目是**唯一例外**（该字段的条目分隔符就是 `；`，条目内部仍不得再用）。
+
+另外，`本章变化` 不是解析器识别的字段：紧跟在 `关键实体`（列表字段）之后会被并进 `key_entities`。要把 `本章变化` 放在某个**标量字段之后**（例如紧跟 `代价` 或 `反派层级`），让它被丢弃而不是污染列表。
 
 ## Step 4：批次校验
 
@@ -205,12 +209,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" run
 不写 token 统计；故障排查只提示 `.webnovel/logs/run_last.log` 或 `/webnovel-doctor`。
 ```
 
-
-```bash
-python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" user-report \
-  --stage chapter-plan --volume {volume_id} --chapter {start_chapter} --format text
-```
-
+## 成功标准
 
 1. 目标卷级文件存在且非空。
 2. 每个目标章节拥有独立、可解析、非空章纲，或明确标记为旧项目 fallback。

@@ -64,3 +64,33 @@ def test_dashboard_file_read_rejects_large_files(monkeypatch, tmp_path):
     response = client.get("/api/files/read", params={"path": "正文/huge.md"})
 
     assert response.status_code == 413
+
+
+def test_dashboard_browses_style_reference_dir(monkeypatch, tmp_path):
+    """`文风/`（参考文本）与正文一样属于只读浏览白名单。"""
+    (tmp_path / ".webnovel").mkdir(parents=True)
+    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    style_dir = tmp_path / "文风"
+    style_dir.mkdir()
+    (style_dir / "片段.md").write_text("「别抬头。」\n", encoding="utf-8")
+    client = _create_dashboard_client(monkeypatch, tmp_path)
+
+    tree = client.get("/api/files/tree").json()
+    assert "文风" in tree
+
+    response = client.get("/api/files/read", params={"path": "文风/片段.md"})
+    assert response.status_code == 200
+    assert "别抬头" in response.json()["content"]
+
+
+def test_dashboard_file_read_rejects_dir_outside_whitelist(monkeypatch, tmp_path):
+    (tmp_path / ".webnovel").mkdir(parents=True)
+    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    outside = tmp_path / "审查报告"
+    outside.mkdir()
+    (outside / "report.md").write_text("internal", encoding="utf-8")
+    client = _create_dashboard_client(monkeypatch, tmp_path)
+
+    response = client.get("/api/files/read", params={"path": "审查报告/report.md"})
+
+    assert response.status_code == 403

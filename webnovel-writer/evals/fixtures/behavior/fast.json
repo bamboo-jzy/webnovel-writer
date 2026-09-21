@@ -112,11 +112,20 @@
       "id": "skill_review_contract",
       "type": "skill_contract",
       "skill": "webnovel-review",
-      "description": "/webnovel-review relies on reviewer output and preserves blocking issue handling.",
+      "description": "/webnovel-review preserves five-dimensional fact review without editorial scoring.",
       "required": [
         "必须通过 `Agent` 工具调用 `reviewer`",
         "review-pipeline",
-        "blocking=true"
+        "blocking=true",
+        "章节事实一致性与逻辑审查",
+        "setting / timeline / continuity / character / logic",
+        "不评分、不评价文笔、不建议情节改动"
+      ],
+      "forbidden_patterns": [
+        "Quality Review Skill",
+        "评估章节质量",
+        "审查涉及爽点或钩子",
+        "审查涉及多线交织"
       ]
     },
     {
@@ -149,7 +158,7 @@
       "required": [
         "只读",
         "/api/story-runtime/health",
-        "python -m dashboard.server"
+        "-m dashboard.server"
       ]
     },
     {
@@ -211,6 +220,41 @@
       "type": "user_report_probe",
       "scenario": "review_blocking_must_handle",
       "description": "Reviewer blocking issues are reported as must-handle."
+    },
+    {
+      "id": "skill_audit_contract",
+      "type": "skill_contract",
+      "skill": "webnovel-audit",
+      "description": "/webnovel-audit stays read-only, discloses threshold provenance, and refuses to conclude on insufficient samples.",
+      "required": [
+        "只读",
+        "scope-audit",
+        "--checks",
+        "--baseline",
+        "不对占比下结论",
+        "题材 profile"
+      ],
+      "forbidden_patterns": [
+        "自动修复",
+        "自动改写"
+      ]
+    },
+    {
+      "id": "skill_style_learn_contract",
+      "type": "skill_contract",
+      "skill": "webnovel-style-learn",
+      "description": "/webnovel-style-learn separates observed from target, defaults to accepted commits, and keeps script output out of manual edits.",
+      "required": [
+        "style-profile build",
+        "现状 ≠ 目标",
+        "--source all",
+        "禁止手改",
+        "accepted"
+      ],
+      "forbidden_patterns": [
+        "改写正文",
+        "直接编辑 JSON"
+      ]
     }
   ]
 }

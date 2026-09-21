@@ -27,8 +27,8 @@ except ImportError:  # pragma: no cover
     )
     from scripts.chapter_paths import find_chapter_file, volume_num_for_chapter
 
-from .projection_log import latest_projection_run, projection_status_from_run
-from .chapter_reloading import body_evidence, upstream_body_blockers
+from .projection_log import degraded_projection_from_run, read_projection_runs, projection_status_from_run
+from .chapter_reloading import body_evidence, chapter_revision_evidence, upstream_body_blockers
 
 
 PHASE_NO_PROJECT = "no_project"
@@ -93,6 +93,10 @@ class ChapterCommitInfo:
     path: str
     projection_status: dict[str, str] = field(default_factory=dict)
     projection_source: str = "commit"
+    # 降级跳过（如未配 embedding 时的 vector）→ writer: reason。
+    # 与 projection_status 的 `skipped` 分开存，因为作者需要知道
+    # "这一项不是不需要，而是没条件做"。
+    projection_degraded: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -101,6 +105,7 @@ class ChapterCommitInfo:
             "path": self.path,
             "projection_status": dict(self.projection_status),
             "projection_source": self.projection_source,
+            "projection_degraded": dict(self.projection_degraded),
         }
 
 
@@ -129,6 +134,9 @@ class ProjectPhaseSnapshot:
     body_revision_stale: bool = False
     body_revision_uncommitted: bool = False
     body_evidence: dict[str, Any] = field(default_factory=dict)
+    revision_evidence: dict[str, Any] = field(default_factory=dict)
+    dependency_impacts: dict[str, Any] = field(default_factory=dict)
+    dependency_impact_records: dict[str, Any] = field(default_factory=dict)
     upstream_body_stale: tuple[int, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
@@ -156,6 +164,9 @@ class ProjectPhaseSnapshot:
             "body_revision_stale": self.body_revision_stale,
             "body_revision_uncommitted": self.body_revision_uncommitted,
             "body_evidence": self.body_evidence,
+            "revision_evidence": self.revision_evidence,
+            "dependency_impacts": self.dependency_impacts,
+            "dependency_impact_records": self.dependency_impact_records,
             "upstream_body_stale": list(self.upstream_body_stale),
         }
 
@@ -198,10 +209,35 @@ def _state_current_chapter(project_root: Path) -> tuple[int, str]:
         return 0, ""
 
 
-def _scan_commits(project_root: Path) -> list[ChapterCommitInfo]:
+def scan_commits(project_root: Path) -> list[ChapterCommitInfo]:
+    """列出书项目内全部章节 commit，并带上每章最新的投影状态。
+
+    投影状态优先取 `projection_log.jsonl` 的**最后一次** run（按章节分组、只读日志一次），
+    否则回落到 commit 自带的 `projection_status`。
+
+    单遍读取：旧实现按章调用 `latest_projection_run`，每章都会重新加锁并读取整份日志
+    （O(章节数 × 日志长度)）；这里改为一次读取后按章分组，语义等价（组内取最后一次）。
+    日志损坏/不可读时，全部章节统一标记为 `failed:projection_log_unreadable`，与旧行为一致。
+    """
     commits_dir = project_root / ".story-system" / "commits"
     if not commits_dir.is_dir():
         return []
+
+    runs_by_chapter: dict[int, dict[str, str]] = {}
+    degraded_by_chapter: dict[int, dict[str, str]] = {}
+    log_error = ""
+    try:
+        for run in read_projection_runs(project_root):
+            chapter = run.get("chapter")
+            if not isinstance(chapter, int) or isinstance(chapter, bool) or chapter <= 0:
+                continue
+            statuses = projection_status_from_run(run)
+            if statuses:
+                runs_by_chapter[chapter] = statuses
+            # 无条件覆盖：组内取最后一次 run，降级已恢复时也要跟着清空。
+            degraded_by_chapter[chapter] = degraded_projection_from_run(run)
+    except (OSError, ValueError) as exc:
+        log_error = str(exc)
 
     commits: list[ChapterCommitInfo] = []
     for path in sorted(commits_dir.glob("chapter_*.commit.json")):
@@ -223,14 +259,13 @@ def _scan_commits(project_root: Path) -> list[ChapterCommitInfo]:
             if isinstance(raw_projection, dict)
         }
         projection_source = "commit"
-        try:
-            latest_run = latest_projection_run(project_root, chapter=chapter)
-            logged_projection_status = projection_status_from_run(latest_run)
-        except Exception:
-            logged_projection_status = {}
-        if logged_projection_status:
-            projection_status = logged_projection_status
+        if log_error:
+            projection_status = {"state": "failed:projection_log_unreadable"}
             projection_source = "projection_log"
+        elif chapter in runs_by_chapter:
+            projection_status = runs_by_chapter[chapter]
+            projection_source = "projection_log"
+        projection_degraded = {} if log_error else dict(degraded_by_chapter.get(chapter) or {})
         commits.append(
             ChapterCommitInfo(
                 chapter=chapter,
@@ -238,6 +273,7 @@ def _scan_commits(project_root: Path) -> list[ChapterCommitInfo]:
                 path=str(path),
                 projection_status=projection_status,
                 projection_source=projection_source,
+                projection_degraded=projection_degraded,
             )
         )
     return commits
@@ -346,17 +382,33 @@ def _volume_artifacts_exist(project_root: Path, volume: int) -> bool:
 def _contracts_stale(project_root: Path, chapter: int, outline_file: str) -> bool:
     if not outline_file or chapter <= 0:
         return False
-    outline_path = Path(outline_file)
     try:
-        outline_mtime = outline_path.stat().st_mtime_ns
-    except OSError:
-        return True
-    contracts = contract_files_for_chapter(project_root, chapter).values()
-    try:
-        contract_mtimes = [path.stat().st_mtime_ns for path in contracts]
-    except OSError:
+        state, _ = _read_json_object(project_root / ".webnovel" / "state.json")
+        entry = state.get("progress", {}).get("chapter_revisions", {}).get(str(chapter), {})
+        planned = next(
+            (
+                item
+                for item in state.get("progress", {}).get("chapters_planned", [])
+                if isinstance(item, dict) and item.get("chapter") == chapter
+            ),
+            {},
+        )
+        recorded_outline = str(planned.get("chapter_outline_revision") or entry.get("chapter_outline_revision") or "")
+        recorded_contract = str(
+            planned.get("contract_revision")
+            or entry.get("contract_revision")
+            or entry.get("validation_input", {}).get("contract_revision")
+            or ""
+        )
+        current_outline = chapter_outline_revision(project_root, chapter)
+        if recorded_outline and current_outline != recorded_outline:
+            return True
+        if recorded_contract:
+            from .chapter_reloading import contract_revision
+            return contract_revision(project_root, chapter) != recorded_contract
         return False
-    return bool(contract_mtimes) and outline_mtime > min(contract_mtimes)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return True
 
 
 def missing_contract_files(project_root: Path, chapter: int) -> tuple[str, ...]:
@@ -416,7 +468,10 @@ def resolve_project_phase(project_root: str | Path | None, chapter: int | None =
         )
 
     state_chapter, state_error = _state_current_chapter(root)
-    commits = _scan_commits(root)
+    state, state_shape_error = _read_json_object(state_path)
+    if state_shape_error and not state_error:
+        state_error = state_shape_error
+    commits = scan_commits(root)
     latest_commit = max(commits, key=lambda item: item.chapter) if commits else None
     accepted = [item.chapter for item in commits if item.status == "accepted"]
     latest_accepted = max(accepted or [0])
@@ -441,8 +496,26 @@ def resolve_project_phase(project_root: str | Path | None, chapter: int | None =
     chapter_contract_stale = (
         _contracts_stale(root, target, chapter_outline_file) if not contract_missing else False
     ) or volume_plan_stale
+    if chapter_outline_source == "split" and chapter_outline_file:
+        planned_row = next(
+            (
+                row for row in state.get("progress", {}).get("chapters_planned", [])
+                if isinstance(row, dict) and row.get("chapter") == target
+            ),
+            {},
+        )
+        entry = state.get("progress", {}).get("chapter_revisions", {}).get(str(target), {})
+        if not (
+            planned_row.get("chapter_outline_revision")
+            or planned_row.get("contract_revision")
+            or entry.get("chapter_outline_revision")
+            or entry.get("contract_revision")
+            or (entry.get("validation_input") or {}).get("contract_revision")
+        ):
+            chapter_contract_stale = True
 
     body = body_evidence(root, target) if target > 0 else {}
+    revision_evidence = chapter_revision_evidence(root, target) if target > 0 else {}
     try:
         upstream_stale = tuple(upstream_body_blockers(root, target)) if target > 0 else ()
     except (OSError, ValueError, TypeError, AttributeError):
@@ -463,6 +536,11 @@ def resolve_project_phase(project_root: str | Path | None, chapter: int | None =
         warnings.append("chapter_contract_stale_after_outline_change")
     if volume_plan_stale:
         warnings.append("chapter_plan_stale_after_volume_change")
+    if latest_commit and latest_commit.projection_degraded:
+        # 降级跳过本身不阻断写作（skipped 是合法终态），但必须让作者看见：
+        # 否则"向量检索一直是空的"会一直无人知晓。
+        for writer, reason in sorted(latest_commit.projection_degraded.items()):
+            warnings.append(f"projection_degraded_{writer}_{reason}")
 
     if has_projection_blocker(latest_commit):
         phase = PHASE_PROJECTION_FAILED
@@ -480,6 +558,8 @@ def resolve_project_phase(project_root: str | Path | None, chapter: int | None =
         phase = PHASE_DRAFT_IN_PROGRESS
     elif latest_commit and latest_commit.chapter >= target and latest_commit.status in {"accepted", "rejected"}:
         phase = PHASE_CHAPTER_COMMITTED
+    elif volume_plan_stale or chapter_contract_stale:
+        phase = PHASE_PLAN_IN_PROGRESS
     elif draft_file and not artifacts_missing:
         phase = PHASE_READY_TO_COMMIT
     elif draft_file:
@@ -519,5 +599,8 @@ def resolve_project_phase(project_root: str | Path | None, chapter: int | None =
         body_revision_stale=bool(body.get("body_revision_stale")),
         body_revision_uncommitted=bool(body.get("body_revision_uncommitted")),
         body_evidence=body,
+        revision_evidence=revision_evidence,
+        dependency_impacts=(revision_evidence.get("dependency_impacts") or {}),
+        dependency_impact_records=(revision_evidence.get("dependency_impact_records") or {}),
         upstream_body_stale=upstream_stale,
     )

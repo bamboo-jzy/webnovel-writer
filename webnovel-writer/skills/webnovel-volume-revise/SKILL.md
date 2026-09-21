@@ -136,10 +136,11 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" vol
 }
 ```
 
+修改完成后，revision 证据必须同时能解释卷纲三份文件、依赖章节的 `source_volume_revision` 和已登记的 stale 范围。mtime 只能作为兼容信息，不能决定卷纲是否新鲜。若任何依赖章节已存在正文或 accepted commit，不得自动刷新章纲、合同或正文；统一指向 `/webnovel-chapter-plan` 和后续章节重载。
+
 ## Step 5：收尾与恢复
 
 再次运行：
-
 ```bash
 python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" placeholder-scan --format text
 python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" user-report \

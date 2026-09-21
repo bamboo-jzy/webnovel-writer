@@ -89,10 +89,11 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" \
 4. 风格指引：reasoning、主角卡 OOC 警戒、anti_patterns
 5. 场景写法补充：`dynamic_context`，仅作风格参考，不能覆盖章纲约束
 
+若当前正文、前置章节或依赖事实存在 `stale` / `previous_chapter_revision_changed`，必须先按报告核对受影响章纲和合同，再运行 `/webnovel-chapter-reload`；不得自动改写下游正文。若履约对账状态为 `needs_reconcile`，必须先预览并记录绑定当前 validation input 的作者裁决，不能把 artifact 自报的 decision 当作授权。
+
 ### Step 1：context-agent 生成写作任务书
 
 必须使用 `Agent` 工具调用 `context-agent`，不得由主流程自行整理任务书。
-
 Use the Agent tool to run `webnovel-writer:context-agent`.
 
 Task:
@@ -275,6 +276,8 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" cha
 
 projection_status 五项（state/index/summary/memory/vector）全部 done 或 skipped。
 
+`chapter-commit` 在投影含 `failed:`/`pending`（含事件镜像失败）时返回非 0，stderr 会给出失败项与补跑命令；此时提交事实已经落盘，按 5.4 只补跑投影。
+
 chapter_status 由 projection writer 自动推进：accepted→committed，rejected→rejected。
 
 ```bash
@@ -290,6 +293,11 @@ commit 未生成→重跑 5.2。projection 失败→只补跑 projection，不�
 python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" \
   projections retry --chapter {chapter_num} --format json
 ```
+
+注意区分两种非 0 退出：
+
+- `chapter-commit` 返回 1 且 `.story-system/commits/chapter_{NNN}.commit.json` **已存在** → 提交事实有效，只是投影没跑完（stderr 会列出失败项）。按上面补跑 projection，不要重跑 review / 重写正文。
+- `chapter-commit` 返回 1 且 commit 文件**不存在** → 提交本身被拒（如 `chapter_artifacts_stale`、`revision_confirmation_required`），回到 5.2 按其提示处理。
 
 ### Step 6：Git 备份
 

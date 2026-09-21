@@ -61,3 +61,38 @@ def test_config_dynamic_template_weights_are_independent_instances(tmp_path):
     cfg1.context_template_weights_dynamic["early"]["plot"]["core"] = 0.77
 
     assert cfg2.context_template_weights_dynamic["early"]["plot"]["core"] != 0.77
+
+
+def test_vector_projection_switch_reads_env(monkeypatch, tmp_path):
+    """向量投影总开关：默认开，显式关得掉，写错不炸（回退默认）。"""
+    for raw in ("0", "false", "FALSE", "no", "off"):
+        monkeypatch.setenv("VECTOR_PROJECTION_ENABLED", raw)
+        assert DataModulesConfig.from_project_root(tmp_path).vector_projection_enabled is False
+
+    for raw in ("1", "true", "TRUE", "yes", "on"):
+        monkeypatch.setenv("VECTOR_PROJECTION_ENABLED", raw)
+        assert DataModulesConfig.from_project_root(tmp_path).vector_projection_enabled is True
+
+    monkeypatch.setenv("VECTOR_PROJECTION_ENABLED", "不是布尔值")
+    assert DataModulesConfig.from_project_root(tmp_path).vector_projection_enabled is True
+
+    monkeypatch.delenv("VECTOR_PROJECTION_ENABLED", raising=False)
+    assert DataModulesConfig.from_project_root(tmp_path).vector_projection_enabled is True
+
+
+def test_embedding_config_gap_detects_missing_credentials(monkeypatch, tmp_path):
+    monkeypatch.delenv("EMBED_API_KEY", raising=False)
+    assert (
+        DataModulesConfig.from_project_root(tmp_path).embedding_config_gap()
+        == "embedding_not_configured"
+    )
+
+    monkeypatch.setenv("EMBED_API_KEY", "sk-test-key")
+    assert DataModulesConfig.from_project_root(tmp_path).embedding_config_gap() == ""
+
+    # 只有空白字符等同于没配 —— 否则会把注定 401 的配置当成"配好了"。
+    monkeypatch.setenv("EMBED_API_KEY", "   ")
+    assert (
+        DataModulesConfig.from_project_root(tmp_path).embedding_config_gap()
+        == "embedding_not_configured"
+    )

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import json
 import sys
 from pathlib import Path
 
@@ -9,11 +10,50 @@ import pytest
 from data_modules.chapter_commit_service import ChapterCommitService
 from data_modules.config import DataModulesConfig
 from data_modules.index_manager import IndexManager
-from .test_chapter_reloading import install_projection_fixture, prepare_inputs
-from data_modules.chapter_reloading import validate_chapter_body
+from .test_chapter_reloading import install_projection_fixture, prepare_inputs, accepted_commit
+from data_modules.chapter_reloading import validate_chapter_body, commit_identity, commit_path
 
 
-def test_commit_service_rejects_when_missed_nodes_exist(tmp_path):
+def test_revision_reuses_projection_for_reordered_events(tmp_path, monkeypatch):
+    payloads = {
+        "review_result": {"blocking_count": 0},
+        "fulfillment_result": {"planned_nodes": [], "covered_nodes": [], "missed_nodes": [], "extra_nodes": []},
+        "disambiguation_result": {"pending": []},
+        "extraction_result": {
+            "accepted_events": [
+                {"event_id": "one", "event_type": "artifact_obtained", "subject": "主角", "payload": {"artifact_id": "玄铁剑", "holder": "主角"}},
+                {"event_id": "two", "event_type": "open_loop_created", "subject": "主角", "payload": {"loop_id": "石门", "question": "门后是什么"}},
+            ],
+            "state_deltas": [],
+            "entity_deltas": [],
+        },
+    }
+    old = accepted_commit(tmp_path, payloads=payloads)
+    old["projection_status"] = {name: "done" for name in ("state", "index", "summary", "memory", "vector")}
+    commit_path(tmp_path, 1).write_text(json.dumps(old, ensure_ascii=False), encoding="utf-8")
+    (tmp_path / "正文" / "第0001章.md").write_text("只调整措辞。", encoding="utf-8")
+    inputs = prepare_inputs(
+        tmp_path,
+        payloads={
+            **payloads,
+            "extraction_result": {
+                **payloads["extraction_result"],
+                "accepted_events": [
+                    {"event_id": "changed-two", "event_type": "open_loop_created", "subject": "主角", "payload": {"loop_id": "石门", "question": "门后是什么"}},
+                    {"event_id": "changed-one", "event_type": "artifact_obtained", "subject": "主角", "payload": {"artifact_id": "玄铁剑", "holder": "主角"}},
+                ],
+            },
+        },
+    )
+    assert validate_chapter_body(tmp_path, 1)["ok"]
+    service = ChapterCommitService(tmp_path)
+    payload = service.build_commit(chapter=1, **inputs)
+    service.persist_commit(payload, expected_previous=commit_identity(old))
+
+    assert payload["provenance"]["projection_reuse"] is True
+    assert not payload["provenance"].get("projection_refresh")
+
+
     service = ChapterCommitService(tmp_path)
     payload = service.build_commit(
         chapter=3,
@@ -29,6 +69,59 @@ def test_commit_service_rejects_when_missed_nodes_exist(tmp_path):
     )
     assert payload["meta"]["status"] == "rejected"
 
+
+def test_commit_service_keeps_model_reported_reconciliation_blocked(tmp_path):
+    service = ChapterCommitService(tmp_path)
+    payload = service.build_commit(
+        chapter=3,
+        review_result={"blocking_count": 0},
+        fulfillment_result={
+            "planned_nodes": ["发现陷阱"],
+            "covered_nodes": [],
+            "missed_nodes": ["发现陷阱"],
+            "extra_nodes": [],
+            "node_statuses": [{"node_id": "cbn-1", "status": "missed"}],
+            "reconciliation": {
+                "decision": "accepted_deviation",
+                "reason": "本章保留悬念，节点延后到下一章",
+                "impact": [4],
+            },
+        },
+        disambiguation_result={"pending": []},
+        extraction_result={"state_deltas": [], "entity_deltas": [], "accepted_events": []},
+    )
+    assert payload["meta"]["status"] == "rejected"
+
+
+def test_commit_service_accepts_author_reconciliation_bound_to_revision(tmp_path):
+    from data_modules.chapter_reloading import reconcile_chapter_body
+    from data_modules.write_gates import run_write_gate
+
+    inputs = prepare_inputs(tmp_path)
+    inputs["fulfillment_result"].update(
+        planned_nodes=["发现陷阱"], covered_nodes=[], missed_nodes=["发现陷阱"],
+        node_statuses=[{"node_id": "cbn-1", "status": "missed"}],
+    )
+    from .test_project_phase import _write_json
+    from data_modules.chapter_reloading import artifact_paths
+    _write_json(artifact_paths(tmp_path)["fulfillment_result"], inputs["fulfillment_result"])
+    assert not validate_chapter_body(tmp_path, 1)["ok"]
+    preview = reconcile_chapter_body(tmp_path, 1, dry_run=True)
+    assert preview["ok"], preview
+    decision = reconcile_chapter_body(
+        tmp_path, 1, decision="accepted_deviation", reason="作者确认延后发现陷阱",
+        impact=[2], expected_input=preview["input_token"],
+    )
+    assert decision["ok"], decision
+    assert validate_chapter_body(tmp_path, 1)["ok"]
+    assert run_write_gate(tmp_path, chapter=1, stage="precommit")["ok"]
+    service = ChapterCommitService(tmp_path)
+    payload = service.build_commit(chapter=1, **inputs)
+    assert payload["meta"]["status"] == "accepted"
+    assert payload["outline_snapshot"]["reconciliation"]["decision_id"] == decision["decision_id"]
+    service.persist_commit(payload)
+    service.apply_projections(payload)
+    assert run_write_gate(tmp_path, chapter=1, stage="postcommit")["ok"]
 
 def test_commit_service_accepts_when_all_checks_pass(tmp_path):
     service = ChapterCommitService(tmp_path)
@@ -268,6 +361,9 @@ def test_apply_projections_normalizes_events_before_router_inspection(
     service = ChapterCommitService(tmp_path)
     payload = {
         "meta": {"status": "accepted", "chapter": 76},
+        "review_result": {"blocking_count": 0},
+        "fulfillment_result": {"planned_nodes": [], "covered_nodes": [], "missed_nodes": [], "extra_nodes": []},
+        "disambiguation_result": {"pending": []},
         "extraction_result": {
             "accepted_events": [
                 {
@@ -419,3 +515,24 @@ def test_apply_projections_writes_events_and_amend_proposals(tmp_path):
     assert row["field"] == "world_rule"
     assert row["override_value"] == "短时失控突破"
     assert row["status"] == "pending"
+
+
+def test_writer_status_maps_degrade_reasons_to_skipped(tmp_path):
+    """降级原因判 skipped；真故障仍必须是 failed —— 两者不能混为一谈。"""
+    service = ChapterCommitService(tmp_path)
+
+    assert service._writer_status({"applied": True}) == "done"
+
+    assert service._writer_status({"applied": False, "reason": "not_required"}) == "skipped"
+    assert service._writer_status({"applied": False, "reason": "commit_rejected"}) == "skipped"
+    assert service._writer_status({"applied": False, "reason": "embedding_unavailable"}) == "skipped"
+    assert service._writer_status({"applied": False, "reason": "vector_projection_disabled"}) == "skipped"
+
+    assert service._writer_status({"applied": False, "reason": "error:store_failed"}) == "failed:store_failed"
+    assert service._writer_status({"applied": False, "reason": "error:db_locked"}) == "failed:db_locked"
+    # 未登记的原因不得被当成降级。
+    assert service._writer_status({"applied": False, "reason": "something_new"}) == "skipped"
+    assert (
+        service._writer_status({"applied": False, "reason": "error:UNIQUE constraint failed"})
+        == "failed:UNIQUE constraint failed"
+    )

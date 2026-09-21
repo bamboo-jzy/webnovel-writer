@@ -35,21 +35,23 @@
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
-│                      Claude Code                           │
+│                      Claude Code                            │
 ├─────────────────────────────────────────────────────────────┤
-│  Skills (12个):                                             │
-│    init / plan / chapter-plan / write / review / query      │
-│    learn / dashboard / doctor / volume-revise / volume-reload│
-│    chapter-reload                                          │
+│  Skills (16个):                                             │
+│    init / outline-revise / plan / volume-revise             │
+│    volume-reload / chapter-plan / chapter-revise            │
+│    chapter-reload / write / review / query                  │
+│    learn / style-learn / dashboard / doctor / audit         │
 ├─────────────────────────────────────────────────────────────┤
-│  Agents (3个):                                             │
-│    Context Agent / Data Agent / Reviewer (含六维审查)        │
+│  Agents (4个):                                              │
+│    Context Agent / Data Agent / Reviewer                    │
+│    Deconstruction Agent                                     │
 ├─────────────────────────────────────────────────────────────┤
-│  Data Layer:                                               │
-│    state.json / index.db (SQLite) / vectors.db             │
+│  Data Layer:                                                │
+│    state.json / index.db (SQLite) / vectors.db              │
 ├─────────────────────────────────────────────────────────────┤
-│  Story System:                                             │
-│    .story-system/ (合同·提交·事件)                           │
+│  Story System:                                              │
+│    .story-system/ (合同·提交·事件)                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -73,7 +75,16 @@
 
 卷纲 revision 以节拍表、时间线、详细大纲三份文件的名称与内容 SHA-256 为依据。写前门禁会比较章节记录的 `source_volume_revision` 与当前 revision；不一致时必须先重载卷纲并重新规划章纲。
 
-正文人工修改由 `/webnovel-chapter-reload` 管理：正文内容 SHA-256 形成 `content_revision`，状态同时记录 `draft_revision`、`validated_revision` 和 `committed_revision`。重载会备份正文、state、章级合同、旧 commit 与临时 artifacts，并将后续章节标记为 `previous_chapter_revision_changed`；reviewer、data-agent 和 precommit 必须携带同一 `validation_input`。旧 accepted commit 归档到 `commits/history/`，事实变化且现有增量投影无法安全撤销时以 `revision_projection_unsafe` 阻断，而不是覆盖旧事实。
+卷纲 revision 以节拍表、时间线、详细大纲三份文件的名称与内容 SHA-256 为依据。写前门禁会比较章节记录的 `source_volume_revision` 与当前 revision；不一致时必须先重载卷纲并重新规划章纲。
+
+### 统一 revision evidence
+
+章节可提交的输入由五项共享证据键组成：`volume_plan_revision`、`chapter_outline_revision`、`contract_revision`、`body_content_revision`、`previous_chapter_revision`。正文 revision 来自内容 SHA-256，规划和合同 revision 来自路径与内容；mtime 仅可作为兼容信息，不能作为新鲜度依据。四份 commit artifact、作者履约裁决和 accepted `CHAPTER_COMMIT` 必须绑定同一 `validation_input`，accepted commit identity 排除投影状态，避免自引用。
+
+### 履约裁决与下游影响
+
+履约对账区分 `fulfilled`、`partial`、`missed`、`contradicted`、`not_applicable`。artifact 只能报告对账事实，独立 reconciliation record 才能记录作者选择、理由、影响范围和关联 revision；没有有效裁决时进入 `needs_reconcile` / `blocked`，不会因为 artifact 自报字段而放行。前置正文 revision 改变后，系统向后传播 `previous_chapter_revision_changed`，并从 accepted events、state/entity deltas 与章纲文本提取角色、物件、关系、地点、时间线和开放问题影响；只标记 `needs_review`，不自动重写作者正文。
+
 
 ## Agent 分工
 
@@ -90,16 +101,17 @@
 ### Reviewer（审）
 
 - 文件：`agents/reviewer.md`
-- 职责：章节质量审查，内部包含以下六个审查维度：
+- 职责：章节事实一致性与逻辑审查，逐一覆盖以下五个维度：
 
 | 审查维度 | 检查重点 |
 |----------|----------|
-| High-point Checker | 爽点密度与质量 |
-| Consistency Checker | 设定一致性（战力/地点/时间线） |
-| Pacing Checker | Strand 比例与断档 |
-| OOC Checker | 人物行为是否偏离人设 |
-| Continuity Checker | 场景与叙事连贯性 |
-| Reader-pull Checker | 钩子强度、期待管理、追读力 |
+| setting | 设定、能力、地点与物品规则一致性 |
+| timeline | 时间承接、倒计时与角色时空冲突 |
+| continuity | 场景、情绪与上章钩子的承接 |
+| character | 性格、动机、对话与知识边界 |
+| logic | 因果关系、决策动机与冲突结果 |
+
+Reviewer 不评分、不评价文笔、不建议情节改动，也不提供爽点、节奏或追读力质量评分。相关数据与参考资料继续服务于规划、写作上下文和查询，不代表 reviewer 已实现完整编辑质量审查。
 
 ## Story System（合同驱动体系）
 

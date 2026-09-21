@@ -214,11 +214,10 @@ class EmbeddingAPIClient:
             return []
 
         all_embeddings: List[Optional[List[float]]] = []
-        batch_size = self.config.embed_batch_size
+        batch_size = max(1, int(self.config.embed_batch_size or 1))
 
         batches = [texts[i:i + batch_size] for i in range(0, len(texts), batch_size)]
-        tasks = [self.embed(batch) for batch in batches]
-        results = await asyncio.gather(*tasks)
+        results = await asyncio.gather(*(self._embed_batch_shrinking(batch) for batch in batches))
 
         for batch_idx, result in enumerate(results):
             actual_batch_size = len(batches[batch_idx])
@@ -232,6 +231,34 @@ class EmbeddingAPIClient:
                 all_embeddings.extend([None] * actual_batch_size)
 
         return all_embeddings[:len(texts)]
+
+    async def _embed_batch_shrinking(
+        self, batch: List[str], *, depth: int = 0
+    ) -> Optional[List[Optional[List[float]]]]:
+        """嵌入一批文本；服务端以"批次过大"拒绝时折半重试。
+
+        多数 OpenAI 兼容网关对单批条数有上限（例如 ≤10），而客户端无从预知该上限，
+        整批丢弃会让投影直接失败，因此逐级折半直到单条为止。
+
+        Returns:
+            与 batch 等长的列表（单条失败为 None）；整批均失败时返回 None，
+            由 `embed_batch` 按 skip_failures 决定是中止还是记为空。
+        """
+        result = await self.embed(batch)
+        if result and len(result) == len(batch):
+            return list(result)
+        if len(batch) > 1 and depth < 8:
+            mid = len(batch) // 2
+            head, tail = await asyncio.gather(
+                self._embed_batch_shrinking(batch[:mid], depth=depth + 1),
+                self._embed_batch_shrinking(batch[mid:], depth=depth + 1),
+            )
+            pieces: List[Optional[List[float]]] = []
+            for part, size in ((head, mid), (tail, len(batch) - mid)):
+                pieces.extend(part if part else [None] * size)
+            if any(piece is not None for piece in pieces):
+                return pieces
+        return None
 
     async def warmup(self):
         """预热服务"""

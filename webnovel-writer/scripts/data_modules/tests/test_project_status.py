@@ -47,6 +47,37 @@ def test_project_status_summary_is_short_and_machine_source_is_json(tmp_path):
     assert payload["schema_version"] == SCHEMA_VERSION
 
 
+def test_project_status_summary_shows_structured_dependency_impacts():
+    report = {
+        "project": "测试书",
+        "project_root": "project",
+        "phase": "draft_in_progress",
+        "latest_accepted_chapter": 1,
+        "target_chapter": 2,
+        "next_action": "run /webnovel-chapter-reload 2",
+        "blocking": [],
+        "warnings": [],
+        "evidence": {
+            "dependency_impact_records": {
+                "1": [
+                    {
+                        "reason": "物件持有 changed: 玄铁剑",
+                        "category": "artifact",
+                        "fact_key": "玄铁剑",
+                        "reload_command": "/webnovel-chapter-reload 2",
+                    }
+                ]
+            }
+        },
+    }
+
+    summary = format_project_status(report, "summary")
+
+    assert "dependency_impacts:" in summary
+    assert "artifact:玄铁剑" in summary
+    assert "/webnovel-chapter-reload 2" in summary
+
+
 def test_project_status_handles_no_project():
     report = build_project_status(None)
 

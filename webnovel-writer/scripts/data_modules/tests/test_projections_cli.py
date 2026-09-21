@@ -93,6 +93,40 @@ def test_retry_projection_reports_missing_commit(tmp_path):
     assert report["error"] == "missing_commit"
 
 
+def _story_event_count(root: Path, chapter: int) -> int:
+    import sqlite3
+
+    db_path = root / ".webnovel" / "index.db"
+    if not db_path.is_file():
+        return 0
+    conn = sqlite3.connect(str(db_path))
+    try:
+        try:
+            return int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM story_events WHERE chapter = ?", (chapter,)
+                ).fetchone()[0]
+            )
+        except sqlite3.OperationalError:
+            return 0
+    finally:
+        conn.close()
+
+
+def test_retry_projection_rebuilds_story_events_mirror_idempotently(tmp_path):
+    """镜像只由 chapter-commit 写，retry/replay 也必须能把它补回来（幂等）。"""
+    _make_accepted_commit_with_event(tmp_path, chapter=3)
+    assert _story_event_count(tmp_path, 3) == 0
+
+    first = retry_projection(tmp_path, chapter=3)
+    assert first["ok"] is True
+    assert _story_event_count(tmp_path, 3) == 1
+
+    second = retry_projection(tmp_path, chapter=3)
+    assert second["ok"] is True
+    assert _story_event_count(tmp_path, 3) == 1
+
+
 def test_replay_projections_runs_range(tmp_path):
     _make_rejected_commit(tmp_path, chapter=1)
     _make_rejected_commit(tmp_path, chapter=2)

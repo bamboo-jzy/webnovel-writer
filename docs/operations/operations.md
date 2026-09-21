@@ -21,17 +21,39 @@
 
 ### 工作区目录
 
+**单书工作区规约：一个工作区只放一本书。** 合法布局只有两种：
+
 ```text
+# 布局 1（推荐）：书目录就是工作区根
 workspace-root/
 ├── .claude/
-│   ├── .webnovel-current-project   # 指向当前书项目根
 │   └── settings.json
-├── 小说A/                          # PROJECT_ROOT
-├── 小说B/
-└── ...
+├── .webnovel/state.json      # 这本书的项目根
+├── 正文/
+└── 大纲/
+
+# 布局 2：工作区下恰好一个书目录
+workspace-root/
+├── .claude/
+│   └── settings.json
+└── 凡人资本论/                # PROJECT_ROOT（唯一子书）
+    └── .webnovel/state.json
 ```
 
-一个工作区可以包含多本书，通过 `.webnovel-current-project` 指针切换当前操作的书。
+定位规则：给定工作区根时，依次尝试 ①该目录本身就是书项目 ②工作区内的唯一子书；
+工作区里出现 **≥2 本书** 属于违规布局，命令会直接报错并列出书单，
+不会误报成"这里不是项目"：
+
+```text
+本插件按「一个工作区一本书」使用，但当前工作区里检测到多本书，无法判定该用哪一本。
+工作区: D:\wk\novels
+检测到 2 本书：
+  - 凡人资本论  (D:\wk\novels\凡人资本论)
+  - 剑走偏锋  (D:\wk\novels\剑走偏锋)
+```
+
+`/webnovel-init` 默认把新书建在 `<workspace>/<书名>/`。若该工作区已有其它书，
+init 会打印单书规约警告（不阻断），提醒你把各本书分到各自的工作区。
 
 ### 书项目目录（PROJECT_ROOT）
 
@@ -55,6 +77,7 @@ project-root/
 ├── 正文/                  # 正文章节
 ├── 大纲/                  # 总纲与卷纲
 ├── 设定集/                # 世界观、角色、力量体系
+├── 文风/                  # 文风参考文本 + 文风档案.md（/webnovel-style-learn）
 └── 审查报告/              # 审查输出
 ```
 
@@ -64,7 +87,7 @@ project-root/
 
 ```text
 ${CLAUDE_PLUGIN_ROOT}/
-├── skills/       # 8 个 Skill 命令定义
+├── skills/       # 16 个 Skill 命令定义
 ├── agents/       # 4 个 Agent 定义
 ├── scripts/      # Python 脚本与数据模块
 ├── hooks/        # Claude Code 会话钩子
@@ -74,13 +97,18 @@ ${CLAUDE_PLUGIN_ROOT}/
 └── dashboard/    # 可视化面板前端
 ```
 
-### 用户级全局映射
+### 工作区指针与用户级 registry（兜底）
 
-当工作区指针不可用时，系统会从用户级 registry 查找 workspace → project 映射：
+单书规约下，这两种记录**只是兜底**，不构成"多书切换"能力：
 
-```text
-${CLAUDE_HOME:-~/.claude}/webnovel-writer/workspaces.json
-```
+- 工作区指针 `<workspace>/.claude/.webnovel-current-project`：由 `/webnovel-init` 写入，
+  内容是一行绝对路径。
+- 用户级 registry：`${CLAUDE_HOME:-~/.claude}/webnovel-writer/workspaces.json`，
+  用于工作区指针不可用（全局安装的 skills、子代理/hook 在空上下文中调用）时的兜底。
+
+两者都只记录"该工作区当前解析到哪本书"。指针失效不会造成误导：解析失败会说明具体原因
+（书不在、还是工作区里有多本）。只有在指针丢失等异常情况下，才需要用 `webnovel use "<书目录>"`
+手工重绑——这是应急命令，日常写作不需要。
 
 ## 常用运维命令
 
@@ -117,6 +145,22 @@ python "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" index proce
 python "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" index stats
 ```
 
+`index process-chapter` 是旧入口，不经过 commit / projection，schema 校验失败也返回 0，**不能用来重建索引**。
+重建索引的正确手段是下面的 `projections replay`（从 commit 重算）或 `projections retry`（单章）。
+
+### 索引对账（doctor）
+
+`doctor` 除检查 `index.db` 是否存在、表是否可读外，还会与 commit / 事件文件对账（2026-09-17 新增）：
+
+| check | 判据 | 级别 |
+|---|---|---|
+| `index.commit_sync` | accepted 且索引投影为 `done` 的章节，`chapters` 表必须有对应行；`index.db` 不可读时同样报错 | **blocker** |
+| `index.orphan_rows` | `chapters` 行存在但没有 accepted commit（如 rejected commit 未清理旧行） | warning |
+| `index.chapter_metadata` | `title` 为空或 `word_count<=0`（多为正文文件名不补零 / 正文缺失） | warning |
+| `index.story_events_sync` | 有事件文件的 accepted 章在 `story_events` 表里没有行 | warning |
+
+漏章、整库被重建、只读/损坏的库都属 `index.commit_sync`。修复顺序：确认 `index.db` 是否被误删或未随项目同步；文件已损坏无法读取时先把它移出项目（改名即可，别直接删除），再 `projections replay`。命令由 doctor 的 `repair` 字段按实际章节号生成，可直接复制。
+
 ### 健康报告
 
 ```bash
@@ -140,7 +184,36 @@ python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" --project-root "${PRO
 python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" --project-root "${PROJECT_ROOT}" projections replay --from-chapter 1 --to-chapter 12 --format text
 ```
 
-投影补跑只从已有 `.story-system/commits/*.commit.json` 读取事实，并重新生成 `.webnovel/state.json`、`index.db`、`summaries/`、`memory_scratchpad.json`、`vectors.db` 等 read-model。每次执行会追加 `.webnovel/projection_log.jsonl`。
+投影补跑只从已有 `.story-system/commits/*.commit.json` 读取事实，并重新生成 `.webnovel/state.json`、`index.db`、`summaries/`、`memory_scratchpad.json`、`vectors.db` 等 read-model。每次执行会追加 `.webnovel/projection_log.jsonl`（撤回信息记在同一行的 `retractions` 字段，不混进 `writers`）。
+
+两条边界（2026-09-17 明确）：
+
+- **会重建 `index.db` 的 `story_events` 镜像**（此前只有 `chapter-commit` 写它，所以镜像一旦写失败就补不回来）。镜像重建是幂等的（`event_id` 唯一 + `INSERT OR IGNORE`）。
+- **不产生 commit 侧副作用**：不改写 `.story-system/events/*.events.json`、正文和 commit。事件 JSON 属于提交事实，归 `chapter-commit` 写。
+- `index.db` 已损坏时，`retry/replay` 会报 `file is not a database`；先把损坏的库移出项目（改名），再 replay 即可整库重建。
+
+#### 撤回重放（2026-09-17 新增）
+
+投影写入器并非全部可重入：`state_changes` 是纯追加表、`relationships` 只 upsert 最新章、`story_events` 镜像是 `INSERT OR IGNORE`、向量分块 ID 由内容哈希决定。所以"上一版事实"留下的行撤不掉——这正是 `persist_commit` 默认拒绝改写已 accepted 事实的理由。现在有两条显式通道：
+
+```bash
+# 1) 作者确认要改写已 accepted 的事实（先撤回该章读模型，再整章重建）
+python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" --project-root "${PROJECT_ROOT}" chapter-commit \
+  --chapter 12 --expected-previous "<identity>" \
+  --allow-fact-revision --revision-reason "作者为什么改写" \
+  --review-result ... --fulfillment-result ... --disambiguation-result ... --extraction-result ...
+
+# 2) 投影半途写坏、被旧行挡住重建时，强制撤回后重放
+python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" --project-root "${PROJECT_ROOT}" projections retry --chapter 12 --retract
+```
+
+撤回范围：`index.db` 的 chapters / scenes / appearances / state_changes / relationships、`vectors.db` 的 vectors / bm25_index / doc_stats、`story_events` 镜像。不碰 `entities` / `aliases`（跨章累积），也不碰正文、commit、事件 JSON，因此可安全重复执行。
+
+默认仍然拒绝事实改写：不带 `--allow-fact-revision` 时 `revision_projection_unsafe` 的报错会带上当前 commit identity 与开关名，便于作者复制后决定。改写后的 commit 会一直带 `provenance.retract_required`，所以它后续每次 `projections retry` 都是"先撤回再重建"。
+
+日志读写使用跨进程文件锁，追加完整 JSONL 行并 flush/fsync。坏 JSON、截断行或非法结构会显式报告 `projection_log.corrupt`，不得跳过坏行、回退到旧的成功记录；doctor、postcommit、retry 和续跑会阻断。先保留损坏文件并核对可信备份，再恢复或人工修复；不要删除日志来制造“已完成”状态。
+
+`index.db` 的连接使用 30s busy timeout（不再用默认 5s）。多 agent / 多终端并行写同一本书时，短暂锁竞争会自动等待而不是立刻失败；若锁被长期持有，命令约 40s 后仍会失败并进入 `projections retry` 路径。
 
 ### 作者友好报告与恢复
 
@@ -160,6 +233,8 @@ python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" --project-root "${PRO
 
 断点建议只负责判断和提示，不自动覆盖文件。凡是涉及作者手改正文、旧正文是否沿用、accepted commit 是否重做，都必须先询问。
 
+`.webnovel/run_ledger.json` 的读改写全程持锁并通过原子替换落盘。文件不存在才初始化；JSON 或结构损坏时，doctor 报告 `run_ledger.corrupt`，`write-resume` 返回 `blocked`，不会清空账本重跑。锁依赖不可用或写入失败同样不能算成功。
+
 不可恢复故障会提示查看：
 
 ```text
@@ -170,14 +245,19 @@ python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" --project-root "${PRO
 
 ### 测试
 
+在仓库根目录运行：
+
 ```bash
-pwsh "${CLAUDE_PLUGIN_ROOT}/scripts/run_tests.ps1" -Mode smoke
-pwsh "${CLAUDE_PLUGIN_ROOT}/scripts/run_tests.ps1" -Mode full
-python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/run_behavior_evals.py" --format text
-python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/validate_plugin_package.py" --format text
+python -X utf8 -m pytest --no-cov
+pwsh webnovel-writer/scripts/run_tests.ps1 -Mode smoke
+pwsh webnovel-writer/scripts/run_tests.ps1 -Mode full
+python -X utf8 webnovel-writer/scripts/run_behavior_evals.py --format text
+python -X utf8 webnovel-writer/scripts/validate_plugin_package.py --format text
 ```
 
-`run_behavior_evals.py` 是快速行为契约检查；`validate_plugin_package.py` 按 plugin-dev 思路检查 manifest、Skill / Agent frontmatter、hooks wrapper、README 版本和路径可移植性。
+CI 覆盖 Ubuntu Python 3.10/3.11/3.12 和 Windows Python 3.11/3.12；Windows 脚本执行 UTF-8 与临时目录预检。完整 pytest 包含中文带空格路径、多进程账本/日志写入、原子替换失败、真实 accepted commit→projection→backup/resume 和损坏阻断 fixture，不调用真实 LLM 或网络 API。
+
+`run_behavior_evals.py` 是快速行为契约检查，不等同于端到端测试；`validate_plugin_package.py` 按 plugin-dev 思路检查 manifest、Skill / Agent frontmatter、hooks wrapper、README 版本和路径可移植性。
 
 ### Hook 开关
 
@@ -213,11 +293,47 @@ python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" --project-root "${PRO
 
 ### 备份
 
-做 Story System 相关备份时，至少同时备份以下内容：
+本地快照和 Git 备份的故事范围统一为：
 
 ```text
+正文/
+大纲/
+设定集/
+文风/
 .story-system/
+.webnovel/state.json
 .webnovel/index.db
+.webnovel/vectors.db
+.webnovel/project_memory.json
+.webnovel/memory_scratchpad.json
+.webnovel/projection_log.jsonl
+.webnovel/style_profile.json
+.webnovel/summaries/
 ```
 
-如果要做章节级回溯，建议连同 `.webnovel/summaries/` 一起备份。
+本地 `snapshot_chNNNN_*` 带 `snapshot/v1` manifest，每个文件记录相对路径、大小和 SHA-256。快照不包含 `.env` / secrets、cache、tmp、`.git`、插件目录、备份目录、符号链接文件或 `.pyc`。
+
+Git 和本地备份成功后统一写入 `.webnovel/backup_receipts.json`（`backup-receipt/v1`）：Git 记录 `chNNNN` tag 与对应 commit；snapshot 记录路径与 manifest SHA-256。续跑会验证 tag/manifest、当前正文和章节提交的内容，而不是看到目录就算完成；tag 或 receipt 写入失败必须报告失败。无 receipt 的旧项目仍可验证现有 tag 或带 manifest 的 snapshot，损坏 receipt 不会被当作缺失后静默回退。
+
+receipt 是本地可重建的运行证据，不作为故事事实、不递归打包进自身备份。回退后仍重新验证当前内容；不要用旧 receipt 替代正文或 commit 的核对。
+
+### 恢复到历史版本
+
+恢复使用 Git 原生命令，插件只负责建立版本点，不再提供恢复子命令：
+
+```bash
+git log --oneline ch0030..HEAD              # 回退点之后有哪些提交
+git diff --stat ch0030 HEAD                 # 会改哪些文件
+git switch -c rewrite-from-ch0030 ch0030    # 工作树整体回到 ch0030 状态，另开分支，历史不动
+```
+
+用 `git switch -c <分支> <tag>` 而不是 `git checkout <tag> -- 正文 大纲 设定集 .story-system`：带 pathspec 的 `git checkout` 在任一目录不存在时整体报错、什么都不恢复（实测），也不会删除回退点之后新增的文件；`git switch` 让工作树状态与 tag 完全一致，原分支与历史完整保留，放弃时 `git switch main` 即可。
+
+约束：
+
+- 动手前 `git status --short` 必须为空；有未提交改动时 `git switch` 会拒绝执行，先提交或撤销
+- 回退点之后仍存在 `chNNNN` tag，但 `chNNNN` 的语义是"该章最新已备份状态"，不是不可变历史点。重写同一章号时 `backup` 先归档旧点（`chNNNN-prev-<时间戳>`）再把 tag 前移到新提交，因此不会失败、也不需要手工删除 tag；要取回某个被前移的状态用 `git switch -c <分支> chNNNN-prev-<时间戳>`
+- `chNNNN-prev-<时间戳>` 只增不改，是真正不可变的历史点；`backup --list` 把它们列在对应章节版本点下方
+- 回退后重新运行 doctor 的 Story System / projection health 检查；正文与 `.webnovel/state.json` 不一致时不得继续续写
+
+无 Git 环境下列出的 `snapshot_chNNNN_*` 是离线副本（带 `snapshot/v1` manifest 与 SHA-256，只保留最近 10 份），没有配套恢复命令，需要手工复制文件；这个模式下恢复能力由作者自行保证。

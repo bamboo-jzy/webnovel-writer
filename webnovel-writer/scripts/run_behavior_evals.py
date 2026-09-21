@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
+from contextlib import redirect_stdout
 import re
 import sys
 import tempfile
@@ -320,6 +322,7 @@ def _eval_user_report_probe(root: Path, case: dict[str, Any]) -> dict[str, Any]:
     scripts_dir = _plugin_root(root) / "scripts"
     if str(scripts_dir) not in sys.path:
         sys.path.insert(0, str(scripts_dir))
+    from backup_manager import GitBackupManager
     from data_modules.projection_log import append_projection_run
     from data_modules.chapter_reloading import chapter_body_revision
     from data_modules.user_report import build_user_report, render_user_report_text
@@ -347,7 +350,9 @@ def _eval_user_report_probe(root: Path, case: dict[str, Any]) -> dict[str, Any]:
                     content_revision=chapter_body_revision(project_root, 1),
                 ),
             )
-            (project_root / ".webnovel" / "backups" / "ch0001_ok").mkdir(parents=True, exist_ok=True)
+            with redirect_stdout(io.StringIO()):
+                if not GitBackupManager(str(project_root), auto_init=False)._local_backup(1):
+                    raise RuntimeError("behavior fixture backup failed")
             report = build_user_report(project_root, stage="write", chapter=1)
             text = render_user_report_text(report)
             ok = report["overall_status"] == "partial" and "review_skipped" in json.dumps(report, ensure_ascii=False) and "minimal" in text
@@ -376,7 +381,9 @@ def _eval_user_report_probe(root: Path, case: dict[str, Any]) -> dict[str, Any]:
                 },
                 commit_path=commit_path,
             )
-            (project_root / ".webnovel" / "backups" / "ch0001_ok").mkdir(parents=True, exist_ok=True)
+            with redirect_stdout(io.StringIO()):
+                if not GitBackupManager(str(project_root), auto_init=False)._local_backup(1):
+                    raise RuntimeError("behavior fixture backup failed")
             report = build_user_report(project_root, stage="write", chapter=1)
             ok = any(item.get("code") == "projection retry" for item in report["issues"]["auto_handled"]) and not report["issues"]["must_handle"]
             evidence = [json.dumps(report["issues"], ensure_ascii=False)]

@@ -31,6 +31,9 @@ FULFILLMENT_LIST_FIELDS = (
     "missed_nodes",
     "extra_nodes",
 )
+RECONCILIATION_DECISIONS = frozenset(
+    {"outline_to_body", "body_to_outline", "accepted_deviation"}
+)
 
 EVENT_TYPE_ALIASES = {
     "character_state": "character_state_changed",
@@ -123,11 +126,50 @@ class FulfillmentResult(CommitArtifactModel):
     covered_nodes: list[Any]
     missed_nodes: list[Any]
     extra_nodes: list[Any]
+    node_statuses: list[dict[str, Any]] = Field(default_factory=list)
+    reconciliation: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator(*FULFILLMENT_LIST_FIELDS, mode="before")
     @classmethod
     def validate_list_fields(cls, value: Any, info: ValidationInfo) -> Any:
         return _ensure_list(cls.artifact_name, info.field_name, value)
+
+    @field_validator("node_statuses", mode="before")
+    @classmethod
+    def validate_node_statuses(cls, value: Any) -> Any:
+        _ensure_object_list(cls.artifact_name, "node_statuses", value)
+        seen = set()
+        for item in value:
+            node_id = item.get("node_id")
+            if not isinstance(node_id, str) or not node_id.strip() or node_id in seen:
+                raise ValueError("node_statuses requires unique non-empty node_id values")
+            seen.add(node_id)
+            if item.get("status") not in {"fulfilled", "partial", "missed", "contradicted", "not_applicable"}:
+                raise ValueError("node_statuses contains an invalid status")
+        return value
+
+    @field_validator("reconciliation", mode="before")
+    @classmethod
+    def validate_reconciliation(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            raise ValueError("fulfillment_result.reconciliation must be an object")
+        return value
+
+
+def fulfillment_deviation_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = [
+        {"status": "missed", "node": node}
+        for node in payload.get("missed_nodes") or []
+    ]
+    items.extend(
+        item
+        for item in payload.get("node_statuses") or []
+        if str(item.get("status") or "") in {"partial", "missed", "contradicted", "not_applicable"}
+    )
+    for node in payload.get("planned_nodes") or []:
+        if node not in (payload.get("covered_nodes") or []) and node not in (payload.get("missed_nodes") or []):
+            items.append({"status": "missed", "node": node})
+    return items
 
 
 class DisambiguationResult(CommitArtifactModel):

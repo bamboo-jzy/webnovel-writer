@@ -19,7 +19,8 @@ New-Item -ItemType Directory -Path $tmpRoot -Force | Out-Null
 
 $env:TMP = $tmpRoot
 $env:TEMP = $tmpRoot
-$env:PYTHONPATH = ".claude/scripts"
+$env:PYTHONPATH = Join-Path $ProjectRoot "webnovel-writer/scripts"
+$env:PYTHONUTF8 = "1"
 
 # 避免 Windows 下 basetemp 目录因权限/残留锁导致 rm_rf 失败（会让所有用例在 setup 阶段直接报错）。
 $runId = Get-Date -Format "yyyyMMdd_HHmmssfff"
@@ -53,17 +54,21 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 if ($Mode -eq "smoke") {
-    python -m pytest -q `
-        .claude/scripts/data_modules/tests/test_extract_chapter_context.py `
-        .claude/scripts/data_modules/tests/test_rag_adapter.py `
+    python -X utf8 -m pytest -q `
+        webnovel-writer/scripts/data_modules/tests/test_extract_chapter_context.py `
+        webnovel-writer/scripts/data_modules/tests/test_rag_adapter.py `
+        webnovel-writer/scripts/data_modules/tests/test_reliability_fixture.py `
+        webnovel-writer/scripts/data_modules/tests/test_run_ledger.py `
+        webnovel-writer/scripts/data_modules/tests/test_projection_log.py `
+        webnovel-writer/scripts/tests/test_backup_manager.py `
         --basetemp $baseTemp `
         --no-cov `
         -p no:cacheprovider
     exit $LASTEXITCODE
 }
 
-python -m pytest -q `
-    .claude/scripts/data_modules/tests `
+python -X utf8 -m pytest -q `
+    --no-cov `
     --basetemp $baseTemp `
     -p no:cacheprovider
 exit $LASTEXITCODE

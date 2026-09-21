@@ -1,15 +1,17 @@
 ---
 name: webnovel-review
-description: 使用审查 Agent 评估章节质量，生成报告并写回审查指标。
+description: 章节事实一致性与逻辑审查，使用五维 reviewer 生成问题报告并写回审查指标。
 allowed-tools: Read Grep Write Edit Bash Agent AskUserQuestion
 argument-hint: "[章号或范围，如 5 或 1-5]"
 ---
 
-# Quality Review Skill
+# Chapter Fact Review Skill
 
 ## 目标
 
-- 解析真实书项目根，调度统一 `reviewer` 完成结构化审查并落库。
+- 解析真实书项目根，调度统一 `reviewer` 完成章节事实一致性与逻辑审查并落库。
+- 必须逐项覆盖 setting / timeline / continuity / character / logic 五维；无问题也显式给出维度结论。
+- 不评分、不评价文笔、不建议情节改动；不提供爽点、节奏或追读力质量评分，不能宣称完整编辑质量达标。
 - 主链事实以 `.story-system/reviews/chapter_{NNN}.review.json` 与 latest accepted `CHAPTER_COMMIT` 为准；`.webnovel/state.json` 仅为兼容投影。
 - 有 `blocking=true` 问题时交用户裁决。
 
@@ -27,7 +29,7 @@ argument-hint: "[章号或范围，如 5 或 1-5]"
 ```bash
 export WORKSPACE_ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
 export SCRIPTS_DIR="${CLAUDE_PLUGIN_ROOT}/scripts"
-export PROJECT_ROOT="$(python "${SCRIPTS_DIR}/webnovel.py" --project-root "${WORKSPACE_ROOT}" where)"
+export PROJECT_ROOT="$(python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${WORKSPACE_ROOT}" where)"
 ```
 
 `PROJECT_ROOT` 必须包含 `.webnovel/state.json`，否则阻断。
@@ -57,8 +59,6 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" \
 |---------|-----------|
 | always | `../../references/shared/core-constraints.md` |
 | always | `../../references/review-schema.md` |
-| 审查涉及爽点或钩子 | `../../references/shared/cool-points-guide.md` |
-| 审查涉及多线交织 | `../../references/shared/strand-weave-pattern.md` |
 | blocking issue 需用户裁决 (Step 8) | `../../references/review/blocking-override-guidelines.md` |
 
 ### Step 4：加载投影状态与待审正文
@@ -114,7 +114,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" rev
 ### Step 7：写入兼容审查记录
 
 ```bash
-python "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" update-state -- --add-review "{chapter_num}-{chapter_num}" "审查报告/第{chapter_num}章审查报告.md"
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" update-state -- --add-review "{chapter_num}-{chapter_num}" "审查报告/第{chapter_num}章审查报告.md"
 ```
 
 兼容投影 / read model，不是写后事实真源。
@@ -145,7 +145,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" run
   --format text
 ```
 
-过程提示每次不超过两行，只说当前动作和影响，例如“正在生成审查报告：会把阻断问题和最值得改的建议放到顶部”。少打扰确认策略：无阻断时不询问；存在 blocking issue、缺待审正文、用户要求是否立即修改时才询问。
+过程提示每次不超过两行，只说当前动作和影响，例如“正在生成审查报告：会把阻断问题和最需要修复的事实问题与证据放到顶部”。少打扰确认策略：无阻断时不询问；存在 blocking issue、缺待审正文、用户要求是否立即修改时才询问。
 
 需要用户裁决时使用有限选项，并说明影响；例如立即修复 / 仅保存报告稍后处理 / 放弃本次审查。卡住时必须说明卡点、已完成内容和恢复建议，例如“reviewer 结果已保存，metrics 落库失败；重新运行 `/webnovel-review {chapter_num}` 会从报告落库继续”。
 
@@ -184,7 +184,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" use
 - `review_metrics` 是否落库。
 - 阻断问题数量。
 - 用户裁决状态。
-- 如果无阻断，明确可以继续写作。
+- 如果无阻断，明确可以继续写作；这里仅表示本次事实审查未发现阻断问题，不代表完整编辑质量达标。
 
 状态规则：
 - 有 blocking 问题且用户未选择处理策略时，最终状态为“需要你处理”。

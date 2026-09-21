@@ -356,6 +356,14 @@ class StateUpdater:
         from data_modules.chapter_reloading import chapter_candidates, upstream_body_blockers
         revision = progress.get("chapter_revisions", {}).get(str(chapter), {})
         root = Path(self.state_file).resolve().parent.parent
+        try:
+            from chapter_outline_loader import chapter_outline_revision
+            from data_modules.chapter_reloading import contract_revision
+            outline_revision = chapter_outline_revision(root, chapter)
+            current_contract_revision = contract_revision(root, chapter)
+        except (OSError, ValueError, TypeError, AttributeError):
+            outline_revision = ""
+            current_contract_revision = ""
         if revision.get("stale_dependencies") and not chapter_candidates(root, chapter):
             if upstream_body_blockers(root, chapter, self.state):
                 raise ValueError("previous chapter revision must be resolved before chapter planning")
@@ -372,6 +380,10 @@ class StateUpdater:
         }
         if volume_revision:
             entry["source_volume_revision"] = volume_revision
+        if outline_revision:
+            entry["chapter_outline_revision"] = outline_revision
+        if current_contract_revision:
+            entry["contract_revision"] = current_contract_revision
 
         for index, item in enumerate(planned):
             if isinstance(item, dict) and item.get("chapter") == int(chapter):

@@ -136,7 +136,7 @@ export default function FilesPage() {
                             <div className="section-label">FILE TREE</div>
                             <div className="card-title">目录树</div>
                         </div>
-                        <Badge tone="cyan">正文 / 大纲 / 设定集</Badge>
+                        <Badge tone="cyan">正文 / 大纲 / 设定集 / 文风</Badge>
                     </div>
 
                     <div className="folder-group-list">

@@ -106,6 +106,19 @@ def test_project_phase_reports_init_ready_after_init_scaffold(tmp_path):
     assert snapshot.blocking == ()
 
 
+def test_project_phase_blocks_split_outline_without_revision_evidence(tmp_path):
+    _make_init_ready(tmp_path)
+    _make_contracts(tmp_path, chapter=1)
+    outline_dir = tmp_path / "大纲"
+    outline_dir.mkdir(exist_ok=True)
+    (outline_dir / "第1章-开端.md").write_text("# 第1章\n\n目标：完成侦查\n", encoding="utf-8")
+
+    snapshot = resolve_project_phase(tmp_path, chapter=1)
+
+    assert snapshot.chapter_contract_stale is True
+    assert snapshot.phase == "plan_in_progress"
+
+
 def test_project_phase_detects_chapter_contract_ready(tmp_path):
     _make_init_ready(tmp_path)
     _make_contracts(tmp_path, chapter=1)
@@ -191,3 +204,94 @@ def test_project_phase_treats_projection_log_pending_as_blocking(tmp_path):
 
     assert snapshot.phase == PHASE_PROJECTION_FAILED
     assert "latest_commit_projection_incomplete" in snapshot.blocking
+
+
+def test_project_phase_warns_on_degraded_projection(tmp_path):
+    """降级跳过不阻断写作，但必须出现在 warnings 里（否则"向量一直是空的"无人知晓）。"""
+    _make_init_ready(tmp_path)
+    commit_path = tmp_path / ".story-system" / "commits" / "chapter_001.commit.json"
+    commit_payload = {
+        "meta": {"chapter": 1, "status": "accepted"},
+        "projection_status": {"state": "done", "index": "done", "vector": "skipped"},
+    }
+    _write_json(commit_path, commit_payload)
+    append_projection_run(
+        tmp_path,
+        commit_payload,
+        {
+            "state": {"status": "done", "result": {"applied": True}},
+            "vector": {
+                "status": "skipped",
+                "result": {
+                    "applied": False,
+                    "reason": "embedding_unavailable",
+                    "detail": "embedding_not_configured",
+                },
+            },
+        },
+        commit_path=commit_path,
+    )
+
+    snapshot = resolve_project_phase(tmp_path)
+
+    assert snapshot.phase != PHASE_PROJECTION_FAILED
+    assert "projection_degraded_vector_embedding_unavailable" in snapshot.warnings
+    assert snapshot.latest_commit is not None
+    assert snapshot.latest_commit.projection_degraded == {"vector": "embedding_unavailable"}
+
+
+def test_project_phase_clears_degrade_warning_after_recovery(tmp_path):
+    """配好凭证补跑成功后，降级提醒必须消失（同章取最后一次 run）。"""
+    _make_init_ready(tmp_path)
+    commit_path = tmp_path / ".story-system" / "commits" / "chapter_001.commit.json"
+    commit_payload = {
+        "meta": {"chapter": 1, "status": "accepted"},
+        "projection_status": {"state": "done", "index": "done", "vector": "skipped"},
+    }
+    _write_json(commit_path, commit_payload)
+    append_projection_run(
+        tmp_path,
+        commit_payload,
+        {
+            "vector": {
+                "status": "skipped",
+                "result": {"applied": False, "reason": "embedding_unavailable"},
+            }
+        },
+        commit_path=commit_path,
+    )
+    append_projection_run(
+        tmp_path,
+        commit_payload,
+        {"vector": {"status": "done", "result": {"applied": True, "stored": 24}}},
+        commit_path=commit_path,
+    )
+
+    snapshot = resolve_project_phase(tmp_path)
+
+    assert snapshot.latest_commit is not None
+    assert snapshot.latest_commit.projection_degraded == {}
+    assert not [w for w in snapshot.warnings if w.startswith("projection_degraded_")]
+
+
+def test_project_phase_ignores_ordinary_skipped_projection(tmp_path):
+    """常规 not_required 跳过不该刷出降级提醒，否则每章都是噪音。"""
+    _make_init_ready(tmp_path)
+    commit_path = tmp_path / ".story-system" / "commits" / "chapter_001.commit.json"
+    commit_payload = {
+        "meta": {"chapter": 1, "status": "accepted"},
+        "projection_status": {"state": "done", "vector": "skipped"},
+    }
+    _write_json(commit_path, commit_payload)
+    append_projection_run(
+        tmp_path,
+        commit_payload,
+        {"vector": {"status": "skipped", "result": {"applied": False, "reason": "not_required"}}},
+        commit_path=commit_path,
+    )
+
+    snapshot = resolve_project_phase(tmp_path)
+
+    assert snapshot.latest_commit is not None
+    assert snapshot.latest_commit.projection_degraded == {}
+    assert not [w for w in snapshot.warnings if w.startswith("projection_degraded_")]

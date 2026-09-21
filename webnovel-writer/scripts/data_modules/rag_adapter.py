@@ -81,10 +81,23 @@ class RAGAdapter:
         return self._degraded_mode_reason
 
     def _update_degraded_mode(self) -> None:
+        """调用 embedding 失败后判定降级原因（供查询侧与投影侧共同消费）。
+
+        - 配置里根本没有 key：任何请求都注定失败，直接判 `embedding_not_configured`；
+        - 端点返回 401/403：凭证无效或过期，判 `embedding_auth_failed`。
+        两者之外保持 None，让上层按真实错误处理，避免把普通故障伪装成降级。
+        """
         self._degraded_mode_reason = None
+        gap = ""
+        config_gap = getattr(self.config, "embedding_config_gap", None)
+        if callable(config_gap):
+            gap = str(config_gap() or "")
+        if gap:
+            self._degraded_mode_reason = gap
+            return
         embed_client = getattr(self.api_client, "_embed_client", None)
         status = getattr(embed_client, "last_error_status", None)
-        if status == 401:
+        if status in (401, 403):
             self._degraded_mode_reason = "embedding_auth_failed"
 
     def _init_db(self):
@@ -404,7 +417,12 @@ class RAGAdapter:
         embeddings = await self.api_client.embed_batch(contents)
 
         if not embeddings:
+            # 全部失败：判定是否属于"embedding 整体不可用"（未配置 / 认证失败），
+            # 供 vector 投影据此降级为 skipped，而不是让整章卡在投影失败。
+            self._update_degraded_mode()
             return 0
+
+        self._degraded_mode_reason = None
 
         # 存储到数据库（跳过嵌入失败的 chunk）
         stored = 0

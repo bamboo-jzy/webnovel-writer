@@ -4,6 +4,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def _ensure_scripts_on_path() -> None:
     scripts_dir = Path(__file__).resolve().parents[2]
@@ -24,6 +26,7 @@ from data_modules.projection_log import (  # noqa: E402
     projection_run_failed,
     projection_status_from_run,
     read_projection_runs,
+    ProjectionLogCorruptionError,
 )
 
 
@@ -61,7 +64,7 @@ def test_projection_status_from_run_prefers_writer_statuses(tmp_path):
     assert projection_run_failed(record) is True
 
 
-def test_projection_log_skips_bad_chapter_when_filtering(tmp_path):
+def test_projection_log_reports_bad_chapter_even_when_filtering(tmp_path):
     path = projection_log_path(tmp_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -74,10 +77,37 @@ def test_projection_log_skips_bad_chapter_when_filtering(tmp_path):
         encoding="utf-8",
     )
 
-    records = read_projection_runs(tmp_path, chapter=3)
+    with pytest.raises(ProjectionLogCorruptionError, match="chapter"):
+        read_projection_runs(tmp_path, chapter=3)
 
-    assert len(records) == 1
-    assert records[0]["chapter"] == 3
+
+@pytest.mark.parametrize("line", [
+    '{"chapter":3,"writers":{"state":[]},"projection_status":{"state":"done"}}',
+    '{"chapter":3,"writers":{"state":{}}}',
+    '{"chapter":3,"projection_status":{"state":null}}',
+])
+def test_projection_log_rejects_malformed_writer_status(tmp_path, line):
+    path = projection_log_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(line, encoding="utf-8")
+    with pytest.raises(ProjectionLogCorruptionError):
+        latest_projection_run(tmp_path, chapter=3)
+    with pytest.raises(ProjectionLogCorruptionError):
+        append_projection_run(tmp_path, {"meta": {"chapter": 3}}, {"state": {"status": "done"}})
+    assert path.read_text(encoding="utf-8") == line
+
+
+def test_projection_log_reports_truncated_line(tmp_path):
+    path = projection_log_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"chapter":3,"status":"done"}\n{"chapter":4', encoding="utf-8")
+
+    try:
+        read_projection_runs(tmp_path)
+    except ProjectionLogCorruptionError as exc:
+        assert ":2:" in str(exc)
+    else:
+        raise AssertionError("truncated projection log line must be reported")
 
 
 def test_projection_run_pending_detects_overall_and_writer_pending():
@@ -114,6 +144,8 @@ def test_chapter_commit_service_writes_projection_log(tmp_path):
 
 
 def test_chapter_commit_service_marks_vector_store_zero_as_failed(monkeypatch, tmp_path):
+    # 凭证配好、存储环节失败 → 必须报 failed（不能因为加了降级分支就把真故障也吞成 skipped）。
+    monkeypatch.setenv("EMBED_API_KEY", "sk-test-key")
     (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)
     (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(
@@ -155,3 +187,56 @@ def test_chapter_commit_service_marks_vector_store_zero_as_failed(monkeypatch, t
     assert latest is not None
     assert projection_run_failed(latest) is True
     assert latest["writers"]["vector"]["status"] == "failed:store_failed"
+
+
+def test_missing_embedding_credentials_degrades_vector_instead_of_blocking(tmp_path, monkeypatch):
+    """D2：没有可用 embedding 时 vector 降级为 skipped 并放行，而不是把整章卡死。
+
+    只改 vector 的判定，其余四项照常投影 —— 降级必须是局部行为。
+    """
+    monkeypatch.delenv("EMBED_API_KEY", raising=False)
+    monkeypatch.delenv("VECTOR_PROJECTION_ENABLED", raising=False)
+    (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+
+    service = ChapterCommitService(tmp_path)
+    payload = service.build_commit(
+        chapter=9,
+        review_result={"blocking_count": 0},
+        fulfillment_result={
+            "planned_nodes": ["突破"],
+            "covered_nodes": ["突破"],
+            "missed_nodes": [],
+            "extra_nodes": [],
+        },
+        disambiguation_result={"pending": []},
+        extraction_result={
+            "state_deltas": [],
+            "entity_deltas": [],
+            "accepted_events": [
+                {
+                    "event_id": "evt-breakthrough-9",
+                    "event_type": "power_breakthrough",
+                    "chapter": 9,
+                    "subject": "韩立",
+                    "payload": {"field": "realm", "to": "筑基中期"},
+                }
+            ],
+        },
+    )
+
+    install_projection_fixture(tmp_path, payload)
+    projected = service.apply_projections(payload)
+
+    assert projected["projection_status"]["vector"] == "skipped"
+    # 其它投影项不受影响，该 done 的仍然是 done。
+    assert projected["projection_status"]["state"] == "done"
+    assert projected["projection_status"]["index"] == "done"
+
+    latest = latest_projection_run(tmp_path, chapter=9)
+    assert latest is not None
+    assert projection_run_failed(latest) is False
+    assert latest["writers"]["vector"]["status"] == "skipped"
+    # 降级原因必须留在日志里，供 project-status / doctor 提醒作者（不能静默）。
+    assert latest["writers"]["vector"]["result"]["reason"] == "embedding_unavailable"
+    assert latest["writers"]["vector"]["result"]["detail"] == "embedding_not_configured"

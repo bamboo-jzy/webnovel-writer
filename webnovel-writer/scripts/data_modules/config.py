@@ -6,6 +6,7 @@ Data Modules - 配置文件
 API 配置通过环境变量读取（支持 .env 文件）：
 - EMBED_BASE_URL, EMBED_MODEL, EMBED_API_KEY
 - RERANK_BASE_URL, RERANK_MODEL, RERANK_API_KEY
+- EMBED_BATCH_SIZE, EMBED_CONCURRENCY, RERANK_CONCURRENCY（可选，按端点限额调整）
 """
 
 import os
@@ -16,6 +17,39 @@ from typing import Optional
 from runtime_compat import normalize_windows_path
 
 from .context_weights import TEMPLATE_WEIGHTS_DYNAMIC_DEFAULT
+
+# index.db 的锁等待上限（秒）。多 agent / 多终端并行写同一本书时，
+# 默认 5s 会在别的进程持有 EXCLUSIVE 锁时直接 `database is locked` 硬失败。
+SQLITE_BUSY_TIMEOUT_SECONDS = 30
+
+
+def _env_int(name: str, default: int) -> int:
+    """读取正整数环境变量，缺失或非法时回退默认值（配置写错不应中断写作流程）。"""
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    """读取布尔环境变量，缺失或非法时回退默认值。
+
+    接受 1/true/yes/on（不区分大小写）为真，0/false/no/off 为假。
+    """
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return default
+    text = str(raw).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
+
 
 def _get_user_claude_root() -> Path:
     raw = os.environ.get("WEBNOVEL_CLAUDE_HOME") or os.environ.get("CLAUDE_HOME")
@@ -147,9 +181,26 @@ class DataModulesConfig:
     embed_model: str = field(default_factory=lambda: os.getenv("EMBED_MODEL", "Qwen/Qwen3-Embedding-8B"))
     embed_api_key: str = field(default_factory=lambda: os.getenv("EMBED_API_KEY", ""))
 
+    # vector 投影总开关。默认开启；置 0/false 时 vector 投影直接判为 skipped，
+    # 不再阻塞 postcommit 闸门（用于"明知不配向量检索"的作者主动关掉）。
+    vector_projection_enabled: bool = field(
+        default_factory=lambda: _env_bool("VECTOR_PROJECTION_ENABLED", True)
+    )
+
     @property
     def embed_url(self) -> str:
         return self.embed_base_url
+
+    def embedding_config_gap(self) -> str:
+        """配置层面的 embedding 可用性判定：返回空串表示"看起来可用"。
+
+        只做静态判定、不发网络请求：没配 key 时任何调用都注定 401，
+        因此可以直接判为不可用。运行时才暴露的问题（认证失败、端点不可达）
+        由 `RAGAdapter.degraded_mode_reason` 在调用之后补充。
+        """
+        if not str(self.embed_api_key or "").strip():
+            return "embedding_not_configured"
+        return ""
 
     # ================= Rerank API 配置 =================
     rerank_api_type: str = "openai"
@@ -162,9 +213,11 @@ class DataModulesConfig:
         return self.rerank_base_url
 
     # ================= 并发配置 =================
-    embed_concurrency: int = 64
-    rerank_concurrency: int = 32
-    embed_batch_size: int = 64
+    # 网关对单批条数的上限各不相同（例如部分 OpenAI 兼容网关限制 ≤10），
+    # 写死默认值会让投影整批失败，因此这三项都允许用环境变量覆盖。
+    embed_concurrency: int = field(default_factory=lambda: _env_int("EMBED_CONCURRENCY", 64))
+    rerank_concurrency: int = field(default_factory=lambda: _env_int("RERANK_CONCURRENCY", 32))
+    embed_batch_size: int = field(default_factory=lambda: _env_int("EMBED_BATCH_SIZE", 64))
 
     # ================= 超时配置 =================
     cold_start_timeout: int = 300

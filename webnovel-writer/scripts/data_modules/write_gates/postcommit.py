@@ -24,9 +24,8 @@ def _projection_status_from_runtime(
     try:
         latest_run = latest_projection_run(project_root, chapter=chapter)
         logged_status = projection_status_from_run(latest_run)
-    except Exception:
-        latest_run = None
-        logged_status = {}
+    except (OSError, ValueError) as exc:
+        return {"state": "failed:projection_log_unreadable"}, "projection_log", {"error": str(exc)}
     if logged_status:
         return logged_status, "projection_log", latest_run or {}
 

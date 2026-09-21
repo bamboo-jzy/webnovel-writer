@@ -44,6 +44,35 @@ def test_prewrite_gate_allows_contract_ready_project_with_warning(tmp_path):
     assert report["details"]["prewrite_validation"]["blocking"] is False
 
 
+def test_gate_reports_preserve_structured_dependency_evidence(tmp_path):
+    _make_init_ready(tmp_path)
+    _make_contracts(tmp_path, chapter=2)
+    records = {
+        "1": [
+            {
+                "source_chapter": 1,
+                "dependent_chapter": 2,
+                "category": "artifact",
+                "fact_key": "玄铁剑",
+                "reason": "物件持有 changed",
+                "reload_command": "/webnovel-chapter-reload 2",
+            }
+        ]
+    }
+    state_path = tmp_path / ".webnovel" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state.setdefault("progress", {})["chapter_revisions"] = {
+        "2": {"dependency_impact_records": records}
+    }
+    state_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+    for stage in ("prewrite", "precommit", "postcommit"):
+        report = run_write_gate(tmp_path, chapter=2, stage=stage)
+        assert report["details"]["phase"]["dependency_impact_records"] == records
+
+
+
+
 def _write_volume_plan(project_root: Path, *, detail: str = "卷级规划\n") -> None:
     outline_dir = project_root / "大纲"
     outline_dir.mkdir(parents=True, exist_ok=True)
@@ -96,7 +125,7 @@ def test_prewrite_gate_blocks_empty_split_outline_after_volume_plan(tmp_path):
     assert any(item["code"] == "chapter_outline_missing" for item in report["errors"])
 
 
-def test_prewrite_gate_blocks_contract_older_than_split_outline(tmp_path):
+def test_prewrite_gate_blocks_contract_after_outline_revision(tmp_path):
     import os
     import time
 
@@ -105,8 +134,11 @@ def test_prewrite_gate_blocks_contract_older_than_split_outline(tmp_path):
     outline = tmp_path / "大纲" / "第1章-开端.md"
     outline.write_text("# 第1章：开端\n\n目标：完成侦查\n", encoding="utf-8")
     _make_contracts(tmp_path, chapter=1)
-    future = time.time() + 2
-    os.utime(outline, (future, future))
+    state_path = tmp_path / ".webnovel" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["progress"]["chapter_revisions"] = {"1": {"chapter_outline_revision": "old"}}
+    state_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    outline.write_text("# 第1章：开端\n\n目标：完成侦查，发现石门\n", encoding="utf-8")
 
     report = run_write_gate(tmp_path, chapter=1, stage="prewrite")
 

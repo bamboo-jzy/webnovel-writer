@@ -24,6 +24,7 @@ from .memory_contract import (
     TimelineEvent,
 )
 from .story_runtime_sources import load_runtime_sources
+from .style_metrics import PROFILE_JSON_NAME
 from .urgency_utils import coerce_urgency
 
 logger = logging.getLogger(__name__)
@@ -268,6 +269,14 @@ class MemoryContractAdapter:
         except Exception as e:
             logger.warning("load_context: style_contract failed: %s", e)
 
+        # 10. 文风档案摘要（/webnovel-style-learn 生成，正文现状 vs 文风目录目标）
+        try:
+            digest = self._load_style_profile_digest()
+            if digest:
+                sections["style_profile"] = digest
+        except Exception as e:
+            logger.warning("load_context: style_profile failed: %s", e)
+
         return ContextPack(
             chapter=chapter,
             sections=sections,
@@ -277,6 +286,9 @@ class MemoryContractAdapter:
     _STYLE_PATTERNS_LIMIT = 10
     _STYLE_PATTERN_DESC_MAX_CHARS = 200
     _STYLE_CONTRACT_MAX_CHARS = 2000
+    #: 文风档案注入上限，与档案生成侧 `style_profile.INJECTION_DIGEST_MAX_CHARS` 同量级：
+    #: 这里再截一次是防御——档案可能是旧版本或有外部编辑。
+    _STYLE_PROFILE_MAX_CHARS = 1500
 
     @staticmethod
     def _importance_weight(value: Any) -> float:
@@ -332,6 +344,28 @@ class MemoryContractAdapter:
             path = matches[0]
         text = path.read_text(encoding="utf-8").strip()
         return text[: self._STYLE_CONTRACT_MAX_CHARS]
+
+    def _load_style_profile_digest(self) -> str:
+        """读 `.webnovel/style_profile.json` 的 `injection_digest`（文风档案摘要）。
+
+        只取摘要，不搬整份档案——任务书的预算和 `style_contract` 一样有限，整份统计表
+        既挤占预算又会让起草阶段陷入数字细节。
+
+        档案损坏 / 缺摘要一律返回空串，**不阻断写作**：文风档案是增强项，不是闸门；
+        它缺失时写作链路与引入该档案之前完全一致。
+        """
+        path = self.config.webnovel_dir / PROFILE_JSON_NAME
+        if not path.exists():
+            return ""
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("%s 解析失败，跳过: %s", PROFILE_JSON_NAME, e)
+            return ""
+        if not isinstance(data, dict):
+            return ""
+        digest = str(data.get("injection_digest") or "").strip()
+        return digest[: self._STYLE_PROFILE_MAX_CHARS]
 
     def query_entity(self, entity_id: str) -> Optional[EntitySnapshot]:
         try:

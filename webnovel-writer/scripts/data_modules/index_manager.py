@@ -43,7 +43,7 @@ from dataclasses import dataclass, field
 from contextlib import contextmanager
 from datetime import datetime
 
-from .config import get_config
+from .config import SQLITE_BUSY_TIMEOUT_SECONDS, get_config
 from .index_chapter_mixin import IndexChapterMixin
 from .index_entity_mixin import IndexEntityMixin
 from .index_debt_mixin import IndexDebtMixin
@@ -626,9 +626,10 @@ class IndexManager(IndexChapterMixin, IndexEntityMixin, IndexDebtMixin, IndexRea
     @contextmanager
     def _get_conn(self):
         """获取数据库连接"""
-        conn = sqlite3.connect(str(self.config.index_db))
+        conn = sqlite3.connect(str(self.config.index_db), timeout=SQLITE_BUSY_TIMEOUT_SECONDS)
         conn.row_factory = sqlite3.Row
         try:
+            conn.execute(f"PRAGMA busy_timeout={int(SQLITE_BUSY_TIMEOUT_SECONDS * 1000)}")
             yield conn
         finally:
             conn.close()

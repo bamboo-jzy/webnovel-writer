@@ -15,7 +15,7 @@ argument-hint: "[章号]"
 - 备份保存的是当前人工稿；旧正文只有已存在的历史备份才能恢复。
 - 重载成功不等于校验通过，校验通过不等于提交成功。
 - 四份 artifacts 必须来自同一个 `validation_input`。不得给旧结果补盖当前 hash 或 validation_id；任何输入变化均需重载并重跑 reviewer/data-agent。
-- 已 accepted 章的旧事实不能直接覆盖。只有重新提取的完整 extraction（除 source 外）与旧版完全相同、旧投影完成且作者确认时，才支持保留历史后复用投影。出现 `revision_projection_unsafe` 必须停止：现有增量投影不能撤销旧事实，不得通过普通 retry/replay、改状态或删除旧 commit 绕过。
+- 已 accepted 章的旧事实不能直接覆盖。只有重新提取的完整 extraction（除 source 外）与旧版完全相同、旧投影完成且作者确认时，才支持保留历史后复用投影。出现 `revision_projection_unsafe` 必须停下默认流程、请作者裁决：默认拒绝是**刻意的**（增量投影撤不掉旧事实），唯一合法通道是作者显式授权 `--allow-fact-revision`，由系统先撤回该章派生读模型（index 行 / 向量分块 / `story_events` 镜像）再整章重建；不得通过普通 retry/replay、改状态或删除旧 commit 绕过。
 
 ## 1. 预览并确认
 
@@ -67,10 +67,29 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" \
 
 任一失败均停止；不得登记已通过。`--validate` 只做版本、schema 和阻断项校验，不会替代 agent 的语义审查。若后续正文、合同或 artifacts 被修改，提交入口仍会拒绝。
 
+## 4A. 履约对账与作者裁决
+
+如果 `fulfillment_result` 含 `missed`、`partial`、`contradicted` 或 `not_applicable` 节点，先预览当前对账输入：
+
+```bash
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" chapter-reload \
+  --chapter {chapter_num} --reconcile --dry-run --format json
+```
+
+作者只能在核对当前正文、章纲、合同、影响章节和 revision evidence 后，明确记录 `accepted_deviation`、`outline_to_body` 或 `body_to_outline`。记录裁决时必须传入预览返回的 `input_token`：
+
+```bash
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" chapter-reload \
+  --chapter {chapter_num} --reconcile \
+  --decision accepted_deviation --reason "{作者理由}" \
+  --impact {affected_chapters} --expected-input "{input_token}" --format json
+```
+
+这一步只记录独立裁决，不修改正文或章纲；输入、artifact 或 revision 变化后 token 立即失效，必须重新预览。未完成裁决时保持 `needs_reconcile` / `blocked`，不能进入 accepted commit。
+
 ## 5. 作者确认后提交
 
 展示新旧 extraction 差异、下游影响和当前校验结论，使用 `AskUserQuestion` 确认提交或仅保留校验结果。不得因用户同意重载就推断同意提交。
-
 没有旧 commit 时省略 `--expected-previous`；有旧 commit 时使用预览返回、经作者确认的 previous_commit identity，不能在冲突后静默替换为新 identity。
 
 ```bash
@@ -84,7 +103,25 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" \
   write-gate --chapter {chapter_num} --stage postcommit --format json
 ```
 
-旧 commit 归档到 `.story-system/commits/history/chapter_NNN/revision_<identity>.commit.json`，保留旧投影状态；同版投影重试不产生新业务 revision。事实变化不支持自动重投影时只报告“已校验、提交被安全阻断”，旧 canonical commit 保持不变。
+旧 commit 归档到 `.story-system/commits/history/chapter_NNN/revision_<identity>.commit.json`，保留旧投影状态；同版投影重试不产生新业务 revision。
+
+### 作者确认要改写已 accepted 的事实
+
+事实有变、或上一轮投影未全绿时，提交会以 `revision_projection_unsafe` 被拒（错误信息会带上当前 commit identity，可直接复制）。这是默认安全行为，不是故障。作者看过新旧 extraction 差异并**明确要求改写**后，用同一个 identity 重跑提交并显式授权：
+
+```bash
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" chapter-commit \
+  --chapter {chapter_num} --expected-previous "{previous_commit}" \
+  --allow-fact-revision --revision-reason "{作者为什么改写}" \
+  --review-result "${PROJECT_ROOT}/.webnovel/tmp/review_results.json" \
+  --fulfillment-result "${PROJECT_ROOT}/.webnovel/tmp/fulfillment_result.json" \
+  --disambiguation-result "${PROJECT_ROOT}/.webnovel/tmp/disambiguation_result.json" \
+  --extraction-result "${PROJECT_ROOT}/.webnovel/tmp/extraction_result.json"
+```
+
+这次提交先撤回该章派生读模型（`index.db` 的 chapters / scenes / appearances / state_changes / relationships、`vectors.db` 分块、`story_events` 镜像）再整章重建，旧 commit 进 history，`provenance.retract_required` / `retract_reason` 留痕。撤回只动读模型，不碰正文、commit 和事件 JSON。重建仍需通过 5.3 的 postcommit 五项检查；失败时补跑 `projections retry --chapter {chapter_num}`（该 commit 会一直带 `retract_required`，所以每次重跑都是"先撤回再重建"，可安全重复）。
+
+投影半途写坏、被旧行挡住重建时，补跑入口是 `projections retry --chapter {chapter_num} --retract`（`--retract` 强制撤回该章派生行再重放）。
 
 ## 收尾
 

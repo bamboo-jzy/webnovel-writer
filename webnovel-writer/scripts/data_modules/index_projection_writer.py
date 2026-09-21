@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
+import sys
 from pathlib import Path
 from typing import Any
 
-from .commit_artifacts import extraction_dict, extraction_list, extraction_text
+from .commit_artifacts import extraction_dict, extraction_list, extraction_text, resolve_scene_index
 from .config import DataModulesConfig
 from .index_manager import ChapterMeta, IndexManager, SceneMeta, StateChangeMeta
 
@@ -18,8 +20,58 @@ except ImportError:  # pragma: no cover
 
 
 class IndexProjectionWriter:
+    # 严格按章归属的投影表：撤回第 N 章时整行删除，重放该章会全部重建。
+    # 不含 entities / aliases —— 它们按实体 ID 跨章累积，删章级行会删掉别的章建立的实体；
+    # upsert 本身会刷新它们，只是 `first_appearance` 可能停留在更早的章（见 retract 注释）。
+    RETRACTABLE_TABLES = ("chapters", "scenes", "appearances", "state_changes", "relationships")
+
     def __init__(self, project_root: Path):
         self.project_root = Path(project_root)
+
+    def retract(self, chapter: int) -> dict:
+        """删除该章在 index.db 中的投影行，让 `apply()` 可以整章重建。
+
+        投影写入器不是全部可重入：`add_chapter` / `add_scenes` / `record_appearance`
+        会覆盖或"先删该章再插"，但 `state_changes` 是**纯追加**、`relationships` 只
+        upsert 最新章、`story_events` 镜像用 `INSERT OR IGNORE`。事实一旦改写
+        （例如某次状态变化换成另一个值），这些表会同时留着新旧两版事实，
+        只靠重放撤不掉旧行——这正是 `persist_commit` 原本拒绝改写事实的理由。
+
+        事实改写（`chapter-commit --allow-fact-revision`）与
+        `projections retry --retract` 都走这里，把该章读模型清干净再重建。
+
+        已知取舍：`entities.first_appearance` / `last_appearance` 不随撤回回退
+        （实体表跨章共享），重建后可能停在别的章；关系行按"最后写入章"归属，
+        撤回第 N 章会删掉 chapter==N 的关系行，重放该章时会按该章事件重建。
+        """
+        try:
+            chapter = int(chapter or 0)
+        except (TypeError, ValueError):
+            chapter = 0
+        if chapter <= 0:
+            return {"applied": False, "writer": "index", "reason": "invalid_chapter", "retracted": 0}
+
+        manager = IndexManager(DataModulesConfig.from_project_root(self.project_root))
+        deleted: dict[str, int] = {}
+        with manager._get_conn() as conn:
+            cursor = conn.cursor()
+            for table in self.RETRACTABLE_TABLES:
+                try:
+                    cursor.execute(f"DELETE FROM {table} WHERE chapter = ?", (chapter,))
+                except sqlite3.OperationalError:
+                    # 表还没建（例如从未投影成功过），视为 0 行
+                    deleted[table] = 0
+                    continue
+                deleted[table] = int(cursor.rowcount or 0)
+            conn.commit()
+        total = sum(deleted.values())
+        return {
+            "applied": total > 0,
+            "writer": "index",
+            "chapter": chapter,
+            "retracted": total,
+            "tables": deleted,
+        }
 
     def apply(self, commit_payload: dict) -> dict:
         if commit_payload["meta"]["status"] != "accepted":
@@ -99,10 +151,26 @@ class IndexProjectionWriter:
             return 0
 
         scene_metas: list[SceneMeta] = []
+        seen_indices: set[int] = set()
         for idx, scene in enumerate(scenes, start=1):
             if not isinstance(scene, dict):
                 continue
-            scene_index = self._safe_int(scene.get("scene_index") or scene.get("index") or idx)
+            scene_index = resolve_scene_index(scene, idx)
+            if scene_index in seen_indices:
+                # Duplicate ordinals hit UNIQUE(chapter, scene_index) and abort the
+                # whole chapter's index projection, so shift to the next free
+                # ordinal instead of failing. (Facts can now be revised via
+                # --allow-fact-revision, but that rebuilds the chapter from scratch
+                # and is not something to require just for a numbering collision.)
+                duplicate = scene_index
+                while scene_index in seen_indices:
+                    scene_index += 1
+                print(
+                    f"[index-projection] chapter {chapter}: duplicate scene index "
+                    f"{duplicate} renumbered to {scene_index}",
+                    file=sys.stderr,
+                )
+            seen_indices.add(scene_index)
             characters = scene.get("characters") or scene.get("character_ids") or []
             if not isinstance(characters, list):
                 characters = []

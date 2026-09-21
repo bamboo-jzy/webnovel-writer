@@ -8,6 +8,20 @@ Problem this solves:
   in a subdirectory (default: `webnovel-project/`).
 
 These helpers provide a single, consistent way to locate the active project root.
+
+单书工作区规约（2026-09-17 定稿）
+--------------------------------
+**一个工作区只放一本书。** 合法布局只有两种：
+
+1. 书目录就是工作区根：`<workspace>/.webnovel/state.json`（推荐）；
+2. 工作区下**恰好一个**子目录是书项目：`<workspace>/<书名>/` 或 `<workspace>/webnovel-project/`。
+
+工作区下同时存在 ≥2 本书属于违规布局：定位失败时抛 `WorkspaceHasMultipleBooksError`
+（`FileNotFoundError` 子类），消息里带书单与规约，避免用"这里不是项目"误导作者。
+
+工作区指针（`.claude/.webnovel-current-project`）与用户级 registry 在此规约下**只是兜底**：
+用于布局非标准、或 subagent/hook 在空上下文下调用。它们不是"多书切换"能力，`use`
+也只是指针丢失时的应急手段。
 """
 
 from __future__ import annotations
@@ -32,6 +46,24 @@ GLOBAL_REGISTRY_REL: Path = Path("webnovel-writer") / "workspaces.json"
 ENV_CLAUDE_PROJECT_DIR = "CLAUDE_PROJECT_DIR"
 ENV_CLAUDE_HOME = "CLAUDE_HOME"
 ENV_WEBNOVEL_CLAUDE_HOME = "WEBNOVEL_CLAUDE_HOME"
+
+
+class WorkspaceHasMultipleBooksError(FileNotFoundError):
+    """
+    工作区下存在多本书，无法判定当前书。
+
+    违反「一个工作区一本书」的单书工作区规约。继承 FileNotFoundError，
+    因此既有 `except FileNotFoundError` 的调用方行为不变，但可以按类型给出更准确的诊断。
+    """
+
+    def __init__(self, workspace_root: Path, books: Iterable[Path]) -> None:
+        self.workspace_root = Path(workspace_root)
+        self.books = [Path(book) for book in books]
+        names = "、".join(book.name for book in self.books)
+        super().__init__(
+            f"工作区存在 {len(self.books)} 本书（{names}），无法判定当前书；"
+            f"本插件按「一个工作区一本书」使用。workspace={self.workspace_root}"
+        )
 
 
 def _find_git_root(cwd: Path) -> Optional[Path]:
@@ -261,6 +293,34 @@ def _pointer_candidates(cwd: Path, *, stop_at: Optional[Path] = None) -> Iterabl
             break
 
 
+def _read_pointer_file(pointer_file: Path) -> Optional[Path]:
+    """Read one pointer file and return the book project root it points at, if valid."""
+    if not pointer_file.is_file():
+        return None
+    try:
+        raw = pointer_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    target = normalize_windows_path(raw).expanduser()
+    if not target.is_absolute():
+        target = (pointer_file.parent / target).resolve()
+    if _is_project_root(target):
+        return target.resolve()
+    return None
+
+
+def read_current_project_pointer(workspace_root: Path) -> Optional[Path]:
+    """
+    读取工作区指针当前指向的书项目根目录。
+
+    指针缺失、内容为空或指向的不是有效书项目时返回 None（不抛异常）。
+    """
+    pointer_file = Path(workspace_root).expanduser() / CURRENT_PROJECT_POINTER_REL
+    return _read_pointer_file(pointer_file)
+
+
 def _resolve_project_root_from_pointer(cwd: Path, *, stop_at: Optional[Path] = None) -> Optional[Path]:
     """
     Resolve project root from workspace pointer file.
@@ -270,30 +330,39 @@ def _resolve_project_root_from_pointer(cwd: Path, *, stop_at: Optional[Path] = N
     - relative path is also supported (resolved relative to pointer's `.claude/` dir).
     """
     for pointer_file in _pointer_candidates(cwd, stop_at=stop_at):
-        if not pointer_file.is_file():
-            continue
-        raw = pointer_file.read_text(encoding="utf-8").strip()
-        if not raw:
-            continue
-        target = normalize_windows_path(raw).expanduser()
-        if not target.is_absolute():
-            target = (pointer_file.parent / target).resolve()
-        if _is_project_root(target):
-            return target.resolve()
+        resolved = _read_pointer_file(pointer_file)
+        if resolved is not None:
+            return resolved
     return None
+
+
+def find_child_project_roots(root: Path) -> list[Path]:
+    """
+    返回 `root` 直属子目录中的书项目（含 `.webnovel/state.json`），按路径稳定排序。
+
+    单书工作区规约：一个工作区最多一本书，因此返回值长度 > 1 即视为违规布局。
+    读取失败（路径不存在 / 无权限）返回空列表，不抛异常。
+    """
+    try:
+        children = [
+            child.resolve()
+            for child in Path(root).expanduser().iterdir()
+            if child.is_dir() and _is_project_root(child)
+        ]
+    except OSError:
+        return []
+    return sorted(children, key=lambda path: os.path.normcase(str(path)))
 
 
 def _resolve_unique_child_project_root(root: Path) -> Optional[Path]:
     """
     Resolve a workspace root that contains exactly one direct child book project.
 
-    This supports commands invoked with a parent workspace path while keeping
-    ambiguous multi-book workspaces explicit.
+    This supports commands invoked with a parent workspace path. Ambiguous
+    multi-book workspaces are reported by the caller as
+    `WorkspaceHasMultipleBooksError`, not silently ignored.
     """
-    try:
-        children = [child.resolve() for child in root.iterdir() if child.is_dir() and _is_project_root(child)]
-    except OSError:
-        return None
+    children = find_child_project_roots(root)
     if len(children) == 1:
         return children[0]
     return None
@@ -346,6 +415,41 @@ def write_current_project_pointer(project_root: Path, *, workspace_root: Optiona
     return pointer_file
 
 
+def detect_workspace_single_book_conflicts(project_root: Path) -> dict:
+    """
+    按「一个工作区一本书」规约检查某本书所在工作区是否冲突（供 init 警告使用）。
+
+    返回（全部为字符串，便于直接打印）：
+    - workspace_root: 判定出的工作区根；无法判定时为空串
+    - other_books: 工作区内**除该书之外**的书项目路径列表
+    - pointer_target: 工作区指针当前指向的书项目；缺失/失效为 None
+
+    本函数只读，不抛异常。
+    """
+    root = normalize_windows_path(project_root).expanduser()
+    try:
+        root = root.resolve()
+    except Exception:
+        pass
+
+    ws_root = _find_workspace_root_with_claude(root)
+    if ws_root is None and root.parent != root:
+        ws_root = root.parent
+
+    other_books: list[str] = []
+    pointer_target: Optional[str] = None
+    if ws_root is not None:
+        other_books = [str(book) for book in find_child_project_roots(ws_root) if book != root]
+        current = read_current_project_pointer(ws_root)
+        pointer_target = str(current) if current is not None else None
+
+    return {
+        "workspace_root": str(ws_root) if ws_root is not None else "",
+        "other_books": other_books,
+        "pointer_target": pointer_target,
+    }
+
+
 def resolve_project_root(explicit_project_root: Optional[str] = None, *, cwd: Optional[Path] = None) -> Path:
     """
     Resolve the webnovel project root directory (the directory containing `.webnovel/state.json`).
@@ -358,8 +462,11 @@ def resolve_project_root(explicit_project_root: Optional[str] = None, *, cwd: Op
     Search safety:
     - If current location is inside a Git repo, parent search stops at the repo root.
       This avoids accidentally binding to unrelated parent directories.
+    - 单书工作区规约：工作区下存在 ≥2 本书时抛 WorkspaceHasMultipleBooksError，
+      而不是笼统地报“这里不是项目”。
 
     Raises:
+        WorkspaceHasMultipleBooksError: if the workspace contains more than one book project.
         FileNotFoundError: if no valid project root can be found.
     """
     if explicit_project_root:
@@ -387,6 +494,9 @@ def resolve_project_root(explicit_project_root: Optional[str] = None, *, cwd: Op
         if reg_root is not None:
             return reg_root
 
+        books = find_child_project_roots(root)
+        if len(books) > 1:
+            raise WorkspaceHasMultipleBooksError(root, books)
         raise FileNotFoundError(f"Not a webnovel project root (missing .webnovel/state.json): {root}")
 
     env_root = os.environ.get("WEBNOVEL_PROJECT_ROOT")
@@ -419,6 +529,10 @@ def resolve_project_root(explicit_project_root: Optional[str] = None, *, cwd: Op
     for candidate in _candidate_roots(base, stop_at=git_root):
         if _is_project_root(candidate):
             return candidate.resolve()
+
+    books = find_child_project_roots(base)
+    if len(books) > 1:
+        raise WorkspaceHasMultipleBooksError(base, books)
 
     raise FileNotFoundError(
         "Unable to locate webnovel project root. Expected `.webnovel/state.json` under the current directory, "

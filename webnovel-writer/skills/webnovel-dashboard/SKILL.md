@@ -31,7 +31,7 @@ export SCRIPTS_DIR="${CLAUDE_PLUGIN_ROOT}/scripts"
 ### Step 2：解析项目根目录
 
 ```bash
-export PROJECT_ROOT="$(python "${SCRIPTS_DIR}/webnovel.py" --project-root "${WORKSPACE_ROOT}" where)"
+export PROJECT_ROOT="$(python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${WORKSPACE_ROOT}" where)"
 echo "项目路径: ${PROJECT_ROOT}"
 ```
 
@@ -55,13 +55,13 @@ fi
 不默认安装依赖。仅当 Step 4 因缺依赖启动失败时，提示用户手动执行：
 
 ```bash
-python -m pip install -r "${DASHBOARD_DIR}/requirements.txt"
+python -X utf8 -m pip install -r "${DASHBOARD_DIR}/requirements.txt"
 ```
 
 ### Step 4：启动 Dashboard
 
 ```bash
-python -m dashboard.server --project-root "${PROJECT_ROOT}"
+python -X utf8 -m dashboard.server --project-root "${PROJECT_ROOT}"
 ```
 
 不自动打开浏览器时加 `--no-browser`；自定义端口加 `--port 9000`。

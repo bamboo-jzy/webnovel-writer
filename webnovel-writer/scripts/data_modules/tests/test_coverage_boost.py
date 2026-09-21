@@ -391,17 +391,19 @@ def test_webnovel_passthrough_rag(monkeypatch, tmp_path):
     assert called["mod"] == "rag_adapter"
 
 
-def test_webnovel_passthrough_style(monkeypatch, tmp_path):
+def test_webnovel_style_subcommand_removed(monkeypatch, tmp_path):
+    """回归（N7，2026-09-21）：`style` 子命令与 `style_sampler` 已整体删除。
+
+    文风能力改由 `style-profile`（`style_profile.py`）+ `webnovel-style-learn`
+    承担。此处钉住「旧入口不再存在」，避免有人把死代码又接回来：
+    argparse 遇到未注册的子命令会以退出码 2 结束。
+    """
     module = _load_webnovel_module()
-    book_root = tmp_path / "book"
-    called = {}
-    monkeypatch.setattr(module, "_resolve_root", lambda _=None: book_root)
-    monkeypatch.setattr(module, "_run_data_module", lambda m, a: (called.update(mod=m), 0)[1])
+    monkeypatch.setattr(module, "_resolve_root", lambda _=None: tmp_path)
     monkeypatch.setattr(sys, "argv", ["webnovel", "style", "list"])
     with pytest.raises(SystemExit) as exc:
         module.main()
-    assert int(exc.value.code or 0) == 0
-    assert called["mod"] == "style_sampler"
+    assert int(exc.value.code or 0) == 2
 
 
 def test_webnovel_passthrough_entity(monkeypatch, tmp_path):
@@ -426,18 +428,6 @@ def test_webnovel_passthrough_context(monkeypatch, tmp_path):
         module.main()
     assert int(exc.value.code or 0) == 0
     assert called["mod"] == "context_manager"
-
-
-def test_webnovel_passthrough_migrate(monkeypatch, tmp_path):
-    module = _load_webnovel_module()
-    called = {}
-    monkeypatch.setattr(module, "_resolve_root", lambda _=None: tmp_path)
-    monkeypatch.setattr(module, "_run_data_module", lambda m, a: (called.update(mod=m), 0)[1])
-    monkeypatch.setattr(sys, "argv", ["webnovel", "migrate"])
-    with pytest.raises(SystemExit) as exc:
-        module.main()
-    assert int(exc.value.code or 0) == 0
-    assert called["mod"] == "migrate_state_to_sqlite"
 
 
 def test_webnovel_passthrough_status_script(monkeypatch, tmp_path):

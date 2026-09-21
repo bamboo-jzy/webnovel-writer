@@ -541,6 +541,9 @@ def test_memory_projection_writer_is_idempotent_for_replay(tmp_path):
 def test_vector_projection_writer_is_idempotent_for_replay(tmp_path, monkeypatch):
     import data_modules.rag_adapter as rag_module
 
+    # 走真实存储路径需要"凭证看起来是配好的"，否则会命中 embedding_unavailable 降级短路。
+    monkeypatch.setenv("EMBED_API_KEY", "sk-test-key")
+
     class StubClient:
         async def embed_batch(self, texts, skip_failures=True):
             return [[1.0, 0.0] for _ in texts]

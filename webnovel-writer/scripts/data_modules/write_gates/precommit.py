@@ -78,14 +78,8 @@ def run_precommit_gate(project_root: Path, chapter: int) -> dict:
             )
         )
 
-    paths = _artifact_paths(project_root)
-    artifact_report = validate_commit_artifact_files(
-        review_result=paths["review_result"],
-        fulfillment_result=paths["fulfillment_result"],
-        disambiguation_result=paths["disambiguation_result"],
-        extraction_result=paths["extraction_result"],
-    )
-    from ..chapter_reloading import assert_artifact_freshness
+    from ..chapter_reloading import assert_artifact_freshness, chapter_artifact_report
+    artifact_report = chapter_artifact_report(project_root, chapter)
     try:
         assert_artifact_freshness(project_root, chapter, artifact_report.get("payloads", {}), require_validated=True)
     except (OSError, ValueError, KeyError) as exc:

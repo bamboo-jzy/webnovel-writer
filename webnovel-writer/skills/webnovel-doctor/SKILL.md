@@ -47,3 +47,11 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${WORKSPACE_ROOT}" d
 汇报包含：当前 `phase` 与 `target_chapter`、是否有 blocker、缺失或异常文件路径、RAG / Python / Dashboard 配置是否缺失、每个问题的影响和建议修复动作。
 
 不执行真实修复，不展示或要求粘贴 API key。
+
+## 索引对账项（2026-09-17 新增）
+
+`doctor` 会拿 `index.db` 与 commit / 事件文件对账，出现下列 check 时按此解读：
+
+- `index.commit_sync`（**blocker**）：accepted 且索引投影为 `done` 的章在 `chapters` 表里没有行，或 `index.db` 不可读。这**不是升级后才坏的**，而是此前没有任何检查能发现漏章；告诉作者事实、影响面（章节查询 / 实体关系 / dashboard 统计缺章）和 `repair` 里给出的 `projections replay` 命令即可。
+- `index.orphan_rows` / `index.chapter_metadata` / `index.story_events_sync`（warning）：分别是旧投影残留、标题/字数退化（多为正文文件名未按 `第NNNN章-标题.md` 命名）、事件镜像缺行。
+- 修复手段统一是 `projections replay`（幂等，可从 commit 整库重建，且会一并重建 `story_events` 镜像）；`index.db` 已损坏时先请作者把损坏文件改名移出项目再 replay。doctor 自己**不做修复**。

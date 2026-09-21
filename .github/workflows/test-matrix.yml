@@ -1,0 +1,77 @@
+name: Python Test Matrix
+
+on:
+  push:
+    paths:
+      - 'webnovel-writer/scripts/**'
+      - 'webnovel-writer/skills/**'
+      - 'webnovel-writer/agents/**'
+      - 'webnovel-writer/evals/**'
+      - 'webnovel-writer/references/**'
+      - 'webnovel-writer/templates/**'
+      - 'webnovel-writer/dashboard/**'
+      - 'webnovel-writer/.claude-plugin/**'
+      - '.claude-plugin/**'
+      - 'docs/**'
+      - 'README.md'
+      - 'pytest.ini'
+      - 'requirements.txt'
+      - '.github/workflows/test-matrix.yml'
+  pull_request:
+    paths:
+      - 'webnovel-writer/scripts/**'
+      - 'webnovel-writer/skills/**'
+      - 'webnovel-writer/agents/**'
+      - 'webnovel-writer/evals/**'
+      - 'webnovel-writer/references/**'
+      - 'webnovel-writer/templates/**'
+      - 'webnovel-writer/dashboard/**'
+      - 'webnovel-writer/.claude-plugin/**'
+      - '.claude-plugin/**'
+      - 'docs/**'
+      - 'README.md'
+      - 'pytest.ini'
+      - 'requirements.txt'
+      - '.github/workflows/test-matrix.yml'
+
+jobs:
+  pytest:
+    env:
+      PYTHONUTF8: '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.10', '3.11', '3.12']
+        exclude:
+          - os: windows-latest
+            python: '3.10'
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Run pytest (Linux)
+        if: runner.os != 'Windows'
+        run: python -X utf8 -m pytest --no-cov
+
+      - name: Run pytest with temporary directory precheck (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./webnovel-writer/scripts/run_tests.ps1 -Mode full
+
+      - name: Run behavior evals
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.11'
+        run: python webnovel-writer/scripts/run_behavior_evals.py --format text
+
+      - name: Validate plugin package
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.11'
+        run: python webnovel-writer/scripts/validate_plugin_package.py --format text

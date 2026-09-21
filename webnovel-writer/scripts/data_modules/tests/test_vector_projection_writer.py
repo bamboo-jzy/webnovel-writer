@@ -128,6 +128,9 @@ def test_rejected_commit_returns_not_applied():
 
 
 def test_store_zero_for_required_chunks_is_error(monkeypatch, tmp_path):
+    # 前提：凭证是配好的，失败来自存储环节本身 —— 这样才能测到"真失败"路径。
+    # 未配凭证属于 embedding_unavailable 降级，另有专门用例覆盖。
+    monkeypatch.setenv("EMBED_API_KEY", "sk-test-key")
     writer = VectorProjectionWriter(tmp_path)
     monkeypatch.setattr(writer, "_store_chunks", lambda chunks: 0)
 
@@ -177,3 +180,91 @@ async def test_run_store_coro_works_inside_active_event_loop():
         return 3
 
     assert writer._run_store_coro(store()) == 3
+
+
+def _accepted_payload() -> dict:
+    return {
+        "meta": {"status": "accepted", "chapter": 47},
+        "summary_text": "韩立在坊市发现丹方线索。",
+        "accepted_events": [],
+        "entity_deltas": [],
+    }
+
+
+def test_missing_credentials_degrades_without_touching_store(monkeypatch, tmp_path):
+    """没配凭证 → 直接降级为 embedding_unavailable，连网络请求都不该发起。"""
+    monkeypatch.delenv("EMBED_API_KEY", raising=False)
+
+    writer = VectorProjectionWriter(tmp_path)
+    calls: list[int] = []
+    monkeypatch.setattr(writer, "_store_chunks", lambda chunks: calls.append(1) or 0)
+
+    result = writer.apply(_accepted_payload())
+
+    assert result["applied"] is False
+    assert result["reason"] == "embedding_unavailable"
+    assert result["detail"] == "embedding_not_configured"
+    assert calls == []
+
+
+def test_vector_projection_switch_disables_projection(monkeypatch, tmp_path):
+    """VECTOR_PROJECTION_ENABLED=0 → 主动关闭，判为可跳过而不是失败。"""
+    monkeypatch.setenv("EMBED_API_KEY", "sk-test-key")
+    monkeypatch.setenv("VECTOR_PROJECTION_ENABLED", "0")
+
+    writer = VectorProjectionWriter(tmp_path)
+    monkeypatch.setattr(writer, "_store_chunks", lambda chunks: 99)
+
+    result = writer.apply(_accepted_payload())
+
+    assert result["applied"] is False
+    assert result["reason"] == "vector_projection_disabled"
+
+
+def test_adapter_degraded_reason_turns_store_zero_into_degrade(monkeypatch, tmp_path):
+    """凭证配了但端点 401：adapter 给出归因 → 降级，而不是报 failed:store_failed。"""
+    monkeypatch.setenv("EMBED_API_KEY", "sk-test-key")
+    monkeypatch.delenv("VECTOR_PROJECTION_ENABLED", raising=False)
+
+    observed: dict = {}
+
+    class _StubAdapter:
+        degraded_mode_reason = "embedding_auth_failed"
+
+        def __init__(self, config):
+            observed["config"] = config
+
+        async def store_chunks(self, chunks):
+            return 0
+
+    monkeypatch.setattr("data_modules.rag_adapter.RAGAdapter", _StubAdapter)
+
+    writer = VectorProjectionWriter(tmp_path)
+    result = writer.apply(_accepted_payload())
+
+    assert writer._last_embedding_diagnosis == "embedding_auth_failed"
+    assert result["reason"] == "embedding_unavailable"
+    assert result["detail"] == "embedding_auth_failed"
+
+
+def test_store_zero_without_diagnosis_stays_a_hard_failure(monkeypatch, tmp_path):
+    """没有归因的 zero store 仍必须是 failed —— 降级分支不能吞掉真故障。"""
+    monkeypatch.setenv("EMBED_API_KEY", "sk-test-key")
+    monkeypatch.delenv("VECTOR_PROJECTION_ENABLED", raising=False)
+
+    class _StubAdapter:
+        degraded_mode_reason = None
+
+        def __init__(self, config):
+            pass
+
+        async def store_chunks(self, chunks):
+            return 0
+
+    monkeypatch.setattr("data_modules.rag_adapter.RAGAdapter", _StubAdapter)
+
+    writer = VectorProjectionWriter(tmp_path)
+    result = writer.apply(_accepted_payload())
+
+    assert writer._last_embedding_diagnosis == ""
+    assert result["reason"] == "error:store_failed"

@@ -118,6 +118,44 @@ def _is_resolved_foreshadowing_status(raw_status: Any) -> bool:
     """判断伏笔是否已回收（兼容历史字段与同义词）。"""
     return is_resolved_foreshadowing_status(raw_status)
 
+
+def _fmt_chapter(value: Any) -> str:
+    """把章节号渲染成报告用语；None → 「未知」。"""
+    return f"第 {value} 章" if isinstance(value, int) and not isinstance(value, bool) else "未知"
+
+
+# ---------------------------------------------------------------------------
+# 伏笔超时判定状态（2026-09-18 重构）
+#
+# 旧实现用 `elapsed`（距埋设的章数）去比绝对阈值（`foreshadowing_urgency_pending_medium`
+# 50 章 / `pending_high` 100 章），**完全不看 `target_chapter`**。后果：
+#   - 缺 `target_chapter` 时（当前真书 9 条全缺）elapsed 必然很小（书才 2 章），
+#     于是全部判「🟢 正常」→ 假阴性：报告写「✅ 所有伏笔进度正常」，实际一无所知；
+#   - 有 `target_chapter` 时也不看剩余章数：目标是第 300 章的伏笔到第 100 章
+#     也会因 elapsed=99 < 150 被标「🟡 轻度超时」→ 假阳性。
+#
+# 新语义：**能判才判，不能判就说不能判**。以 `remaining = target - current` 为主判据；
+# 缺目标章时只保留一条明确标注为启发式的「悬挂过久」信号，绝不报「正常」。
+# ---------------------------------------------------------------------------
+FS_STATUS_OVERDUE = "🔴 已超期"
+FS_STATUS_DUE_SOON = "🟡 临近目标"
+FS_STATUS_ON_TRACK = "🟢 正常"
+FS_STATUS_LONG_PENDING = "🟠 长期未回收"
+FS_STATUS_NO_TARGET = "⚪ 缺目标章"
+FS_STATUS_INSUFFICIENT = "⚪ 数据不足"
+
+#: 状态里「已能判定为有问题」的集合
+FS_STATUS_PROBLEM = frozenset({FS_STATUS_OVERDUE, FS_STATUS_DUE_SOON, FS_STATUS_LONG_PENDING})
+
+#: 状态里「无法判定」的集合——报告不得把它们渲染成「正常」
+FS_STATUS_UNKNOWN = frozenset({FS_STATUS_NO_TARGET, FS_STATUS_INSUFFICIENT})
+
+#: Strand 占比结论所需的最小样本章数。
+#: 占比目标（Quest 55-65% 等）是整卷/全书口径，短样本上的占比没有统计意义——
+#: 一本 400 章的书在第 2 章必然是 100% Quest，那不是问题。
+STRAND_RATIO_MIN_SAMPLE = 10
+
+
 def _enable_windows_utf8_stdio() -> None:
     """在 Windows 下启用 UTF-8 输出；pytest 环境跳过以避免捕获冲突。"""
     enable_windows_utf8_stdio(skip_in_pytest=True)
@@ -135,9 +173,62 @@ class StatusReporter:
         self.state = None
         self.chapters_data = []
         self._reading_power_cache: Dict[int, Optional[Dict[str, Any]]] = {}
+        self._pacing_thresholds_cache: Optional[Dict[str, Any]] = None
 
-        # v5.1 引入: 使用 IndexManager 读取实体
-        self._index_manager = IndexManager(self.config)
+        # v5.1 引入: 使用 IndexManager 读取实体。
+        # 延迟到首次真正读实体时才构造 —— `IndexManager.__init__` 会调 `_init_db()`
+        # （`CREATE TABLE IF NOT EXISTS` + commit），是**有写副作用**的构造器；
+        # 构造即建库会让纯读取场景（doctor / status / scope-audit 等）在「只读打开」
+        # index.db 时改动其文件头字节，破坏「读取不落盘」的契约。
+        self._index_manager_instance: Optional[IndexManager] = None
+
+    @property
+    def _index_manager(self) -> IndexManager:
+        """惰性构造 IndexManager：只在真正要读实体/关系索引时才建连。"""
+        if self._index_manager_instance is None:
+            self._index_manager_instance = IndexManager(self.config)
+        return self._index_manager_instance
+
+    def pacing_thresholds(self) -> Dict[str, Any]:
+        """
+        取节奏类阈值：优先用题材 profile（`references/genre-profiles.md`），
+        读不到才回落 `config` 硬编码默认值，并在返回值里如实标注 `source`。
+
+        背景（2026-09-18）：此前只用 `config.strand_quest_max_consecutive` 等通用默认值
+        （quest 5 / fire 10），而题材 profile 另有取值（规则怪谈 quest 4 / fire 15）
+        —— 两个方向都可能不同，导致对所有题材统一误报。
+        """
+        if self._pacing_thresholds_cache is None:
+            try:
+                from data_modules.genre_profile_loader import (
+                    build_project_info,
+                    resolve_pacing_thresholds,
+                )
+            except ImportError:  # pragma: no cover - 兼容 scripts/ 直挂形态
+                from scripts.data_modules.genre_profile_loader import (
+                    build_project_info,
+                    resolve_pacing_thresholds,
+                )
+            try:
+                self._pacing_thresholds_cache = resolve_pacing_thresholds(
+                    build_project_info(self.state), self.config
+                )
+            except Exception:
+                # 阈值解析永不阻塞报告生成
+                self._pacing_thresholds_cache = {
+                    "strand_quest_max_consecutive": int(self.config.strand_quest_max_consecutive),
+                    "strand_fire_max_gap": int(self.config.strand_fire_max_gap),
+                    "strand_constellation_max_gap": int(self.config.strand_constellation_max_gap),
+                    "stagnation_threshold": None,
+                    "transition_max_consecutive": None,
+                    "source": "config_default",
+                    "profile_id": None,
+                    "profile_name": None,
+                    "matched_by": None,
+                    "matched_value": None,
+                    "overridden": [],
+                }
+        return self._pacing_thresholds_cache
 
     def _extract_stats_field(self, content: str, field_name: str) -> str:
         """
@@ -233,13 +324,9 @@ class StatusReporter:
             if target_chapter is not None:
                 remaining = target_chapter - current_chapter
 
-            if remaining is not None and remaining < 0:
-                overtime_status = "🔴 已超期"
-            elif elapsed is None:
-                overtime_status = "⚪ 数据不足"
-            else:
-                overtime_status = self._get_foreshadowing_status(elapsed)
-
+            overtime_status = self._judge_foreshadowing_overtime(
+                remaining=remaining, elapsed=elapsed
+            )
             urgency: Optional[float] = None
             if (
                 planted_chapter is not None
@@ -257,9 +344,12 @@ class StatusReporter:
                 urgency = round(weight * 2.0, 2)
 
             if remaining is not None and remaining < 0:
-                urgency_status = "🔴 已超期"
+                urgency_status = FS_STATUS_OVERDUE
             elif urgency is None:
-                urgency_status = "⚪ 数据不足"
+                # 区分「缺埋设章」（真的缺数据）与「缺目标章」（可补的字段缺失）
+                urgency_status = (
+                    FS_STATUS_NO_TARGET if planted_chapter is not None else FS_STATUS_INSUFFICIENT
+                )
             else:
                 urgency_status = self._get_urgency_status(urgency, remaining if remaining is not None else 0)
 
@@ -495,10 +585,42 @@ class StatusReporter:
             for item in records
         ]
 
+    def _judge_foreshadowing_overtime(
+        self, *, remaining: Optional[int], elapsed: Optional[int]
+    ) -> str:
+        """
+        判定伏笔超时状态（以「距目标章的剩余章数」为主判据）。
+
+        参数：
+            remaining: `target_chapter - current_chapter`；无目标章时为 None
+            elapsed:   `current_chapter - planted_chapter`；无埋设章时为 None
+
+        返回 FS_STATUS_* 之一。**缺目标章时不返回「🟢 正常」**——那正是旧实现的假阴性来源。
+        """
+        if remaining is not None:
+            if remaining < 0:
+                return FS_STATUS_OVERDUE
+            if remaining <= max(0, int(self.config.foreshadowing_urgency_target_proximity)):
+                return FS_STATUS_DUE_SOON
+            return FS_STATUS_ON_TRACK
+
+        if elapsed is None:
+            return FS_STATUS_INSUFFICIENT
+
+        # 无目标章：只能给启发式信号，且必须与「正常」区分开
+        if elapsed >= int(self.config.foreshadowing_urgency_pending_high):
+            return FS_STATUS_LONG_PENDING
+        return FS_STATUS_NO_TARGET
+
     def _get_foreshadowing_status(self, elapsed: int) -> str:
-        """判断伏笔超时状态"""
+        """
+        仅按绝对悬挂章数判定的**启发式**档位（保留给显式调用方）。
+
+        注意：本方法不看 `target_chapter`，因此**不能**用来判断「是否逾期」。
+        逾期判定请用 `_judge_foreshadowing_overtime()`。
+        """
         if elapsed < self.config.foreshadowing_urgency_pending_medium:
-            return "🟢 正常"
+            return FS_STATUS_ON_TRACK
         elif elapsed < self.config.foreshadowing_urgency_pending_high + 50:
             return "🟡 轻度超时"
         else:
@@ -598,7 +720,12 @@ class StatusReporter:
         # 检查违规
         violations = []
 
-        # 检查 Quest 连续超过 5 章
+        thresholds = self.pacing_thresholds()
+        quest_max = int(thresholds["strand_quest_max_consecutive"])
+        fire_max = int(thresholds["strand_fire_max_gap"])
+        const_max = int(thresholds["strand_constellation_max_gap"])
+
+        # 检查 Quest 连续超限
         quest_streak = 0
         max_quest_streak = 0
         for entry in history:
@@ -609,10 +736,10 @@ class StatusReporter:
             else:
                 quest_streak = 0
 
-        if max_quest_streak > self.config.strand_quest_max_consecutive:
-            violations.append(f"Quest 线连续 {max_quest_streak} 章（超过 {self.config.strand_quest_max_consecutive} 章限制）")
+        if max_quest_streak > quest_max:
+            violations.append(f"Quest 线连续 {max_quest_streak} 章（超过 {quest_max} 章限制）")
 
-        # 检查 Fire 缺失超过 10 章
+        # 检查 Fire 缺失超限
         fire_gap = 0
         max_fire_gap = 0
         for entry in history:
@@ -624,10 +751,10 @@ class StatusReporter:
                 fire_gap += 1
         max_fire_gap = max(max_fire_gap, fire_gap)
 
-        if max_fire_gap > self.config.strand_fire_max_gap:
-            violations.append(f"Fire 线缺失 {max_fire_gap} 章（超过 {self.config.strand_fire_max_gap} 章限制）")
+        if max_fire_gap > fire_max:
+            violations.append(f"Fire 线缺失 {max_fire_gap} 章（超过 {fire_max} 章限制）")
 
-        # 检查 Constellation 缺失超过 15 章
+        # 检查 Constellation 缺失超限
         const_gap = 0
         max_const_gap = 0
         for entry in history:
@@ -639,25 +766,31 @@ class StatusReporter:
                 const_gap += 1
         max_const_gap = max(max_const_gap, const_gap)
 
-        if max_const_gap > self.config.strand_constellation_max_gap:
-            violations.append(f"Constellation 线缺失 {max_const_gap} 章（超过 {self.config.strand_constellation_max_gap} 章限制）")
+        if max_const_gap > const_max:
+            violations.append(f"Constellation 线缺失 {max_const_gap} 章（超过 {const_max} 章限制）")
 
         # 检查占比是否在合理范围
+        #
+        # 短样本保护（2026-09-18）：占比目标（如 Quest 55-65%）是**整卷/全书**口径，
+        # 在开篇 2 章上毫无意义——100% Quest 是正常开局。样本不足时不出占比结论，
+        # 只如实标注，避免把新书开头渲染成「3 个问题」。
         cfg = self.config
-        if quest_ratio < cfg.strand_quest_ratio_min:
-            violations.append(f"Quest 占比 {quest_ratio:.1f}% 偏低（目标 {cfg.strand_quest_ratio_min}-{cfg.strand_quest_ratio_max}%）")
-        elif quest_ratio > cfg.strand_quest_ratio_max:
-            violations.append(f"Quest 占比 {quest_ratio:.1f}% 偏高（目标 {cfg.strand_quest_ratio_min}-{cfg.strand_quest_ratio_max}%）")
+        sample_adequate = total >= STRAND_RATIO_MIN_SAMPLE
+        if sample_adequate:
+            if quest_ratio < cfg.strand_quest_ratio_min:
+                violations.append(f"Quest 占比 {quest_ratio:.1f}% 偏低（目标 {cfg.strand_quest_ratio_min}-{cfg.strand_quest_ratio_max}%）")
+            elif quest_ratio > cfg.strand_quest_ratio_max:
+                violations.append(f"Quest 占比 {quest_ratio:.1f}% 偏高（目标 {cfg.strand_quest_ratio_min}-{cfg.strand_quest_ratio_max}%）")
 
-        if fire_ratio < cfg.strand_fire_ratio_min:
-            violations.append(f"Fire 占比 {fire_ratio:.1f}% 偏低（目标 {cfg.strand_fire_ratio_min}-{cfg.strand_fire_ratio_max}%）")
-        elif fire_ratio > cfg.strand_fire_ratio_max:
-            violations.append(f"Fire 占比 {fire_ratio:.1f}% 偏高（目标 {cfg.strand_fire_ratio_min}-{cfg.strand_fire_ratio_max}%）")
+            if fire_ratio < cfg.strand_fire_ratio_min:
+                violations.append(f"Fire 占比 {fire_ratio:.1f}% 偏低（目标 {cfg.strand_fire_ratio_min}-{cfg.strand_fire_ratio_max}%）")
+            elif fire_ratio > cfg.strand_fire_ratio_max:
+                violations.append(f"Fire 占比 {fire_ratio:.1f}% 偏高（目标 {cfg.strand_fire_ratio_min}-{cfg.strand_fire_ratio_max}%）")
 
-        if constellation_ratio < cfg.strand_constellation_ratio_min:
-            violations.append(f"Constellation 占比 {constellation_ratio:.1f}% 偏低（目标 {cfg.strand_constellation_ratio_min}-{cfg.strand_constellation_ratio_max}%）")
-        elif constellation_ratio > cfg.strand_constellation_ratio_max:
-            violations.append(f"Constellation 占比 {constellation_ratio:.1f}% 偏高（目标 {cfg.strand_constellation_ratio_min}-{cfg.strand_constellation_ratio_max}%）")
+            if constellation_ratio < cfg.strand_constellation_ratio_min:
+                violations.append(f"Constellation 占比 {constellation_ratio:.1f}% 偏低（目标 {cfg.strand_constellation_ratio_min}-{cfg.strand_constellation_ratio_max}%）")
+            elif constellation_ratio > cfg.strand_constellation_ratio_max:
+                violations.append(f"Constellation 占比 {constellation_ratio:.1f}% 偏高（目标 {cfg.strand_constellation_ratio_min}-{cfg.strand_constellation_ratio_max}%）")
 
         return {
             "has_data": True,
@@ -669,6 +802,9 @@ class StatusReporter:
             "max_quest_streak": max_quest_streak,
             "max_fire_gap": max_fire_gap,
             "max_const_gap": max_const_gap,
+            "sample_adequate": sample_adequate,
+            "ratio_min_sample": STRAND_RATIO_MIN_SAMPLE,
+            "thresholds": thresholds,
             "health": "✅ 健康" if not violations else f"⚠️ {len(violations)} 个问题"
         }
 
@@ -971,39 +1107,78 @@ class StatusReporter:
         return lines
 
     def _generate_foreshadowing_section(self) -> List[str]:
-        """生成伏笔分析章节"""
+        """生成伏笔分析章节（2026-09-18：不再把「无法判定」渲染成「正常」）"""
         overdue = self.analyze_foreshadowing()
 
-        # 筛选超时伏笔
-        overdue_items = [
-            item for item in overdue if "超时" in item["status"] or "超期" in item["status"]
-        ]
-        unknown_items = [item for item in overdue if item["status"] == "⚪ 数据不足"]
+        overdue_items = [item for item in overdue if item["status"] == FS_STATUS_OVERDUE]
+        due_soon_items = [item for item in overdue if item["status"] == FS_STATUS_DUE_SOON]
+        long_pending_items = [item for item in overdue if item["status"] == FS_STATUS_LONG_PENDING]
+        unknown_items = [item for item in overdue if item["status"] in FS_STATUS_UNKNOWN]
 
         lines = [
-            f"## ⚠️ 伏笔超时（{len(overdue_items)}条）",
+            f"## ⚠️ 伏笔超时（{len(overdue_items)}条已超期）",
             ""
         ]
 
+        hint = (
+            "`open_loop_created` 事件未提供 `target_chapter`；补齐后本项才能给出逾期结论"
+            "（见缺口清单 N4 与 `references/index/skill-gap-assessment-2026-09-17.md` 附录 B）。"
+        )
+        all_unknown = False
+
         if overdue_items:
             lines.extend([
-                "| 伏笔内容 | 埋设章节 | 已过章节 | 状态 |",
-                "|---------|---------|---------|------|"
+                "| 伏笔内容 | 埋设章节 | 目标章节 | 已过章节 | 状态 |",
+                "|---------|---------|---------|---------|------|"
             ])
 
             for item in sorted(overdue_items, key=lambda x: (x["elapsed"] if x["elapsed"] is not None else -1), reverse=True):
-                planted = item["planted_chapter"] if item["planted_chapter"] is not None else "未知"
-                elapsed = item["elapsed"] if item["elapsed"] is not None else "未知"
                 lines.append(
-                    f"| {item['content'][:30]}... | 第 {planted} 章 | "
-                    f"{elapsed} 章 | {item['status']} |"
+                    f"| {item['content'][:30]}... | {_fmt_chapter(item['planted_chapter'])} | "
+                    f"{_fmt_chapter(item.get('target_chapter'))} | {_fmt_chapter(item['elapsed'])} 章 | "
+                    f"{item['status']} |"
                 )
+        elif due_soon_items or long_pending_items:
+            lines.append("✅ 无已超期伏笔（但有需关注项，见下，请注意区分）")
+        elif unknown_items:
+            # 关键修复：一条都判不了时，绝不写「所有伏笔进度正常」
+            all_unknown = True
+            lines.append(
+                f"⚠️ 无法判断：{len(unknown_items)} 条伏笔均缺少目标回收章，"
+                "因此**不能**得出「伏笔进度正常」的结论。"
+            )
         else:
             lines.append("✅ 所有伏笔进度正常")
 
-        if unknown_items:
+        if due_soon_items:
             lines.append("")
-            lines.append(f"⚪ 另有 {len(unknown_items)} 条伏笔缺少章节信息，无法判断是否超时")
+            lines.append(f"🟡 临近目标（{len(due_soon_items)}条）：")
+            for item in due_soon_items:
+                lines.append(
+                    f"- {item['content'][:40]}…（目标 {_fmt_chapter(item.get('target_chapter'))}）"
+                )
+
+        if long_pending_items:
+            lines.append("")
+            lines.append(
+                f"🟠 长期未回收（{len(long_pending_items)}条）：埋设已超过 "
+                f"{self.config.foreshadowing_urgency_pending_high} 章且**没有目标回收章**，"
+                "属启发式提示，无法据此判定逾期。"
+            )
+            for item in long_pending_items:
+                lines.append(
+                    f"- {item['content'][:40]}…（埋设 {_fmt_chapter(item['planted_chapter'])}，"
+                    f"已过 {_fmt_chapter(item['elapsed'])}）"
+                )
+
+        if unknown_items and not all_unknown:
+            lines.append("")
+            lines.append(
+                f"⚪ 另有 {len(unknown_items)} 条伏笔缺少目标回收章，**无法判断**是否超时。{hint}"
+            )
+        elif all_unknown:
+            lines.append("")
+            lines.append(hint)
 
         lines.extend(["", "---", ""])
 
@@ -1030,7 +1205,22 @@ class StatusReporter:
 
         unknown_items = [item for item in urgency_list if item["urgency"] is None]
         if unknown_items:
-            lines.append(f"> {len(unknown_items)} 条伏笔缺少埋设/目标章节，紧急度记为 N/A")
+            # 如实区分「缺埋设章」与「缺目标章」——真书实测 9 条全部是后者，
+            # 旧措辞笼统写成「缺少埋设/目标章节」，掩盖了真正缺的那一项。
+            missing_target = sum(
+                1 for item in unknown_items if item.get("target_chapter") is None
+            )
+            missing_planted = sum(
+                1 for item in unknown_items if item.get("planted_chapter") is None
+            )
+            reasons = []
+            if missing_target:
+                reasons.append(f"{missing_target} 条缺目标回收章")
+            if missing_planted:
+                reasons.append(f"{missing_planted} 条缺埋设章")
+            lines.append(
+                f"> {len(unknown_items)} 条伏笔无法计算紧急度（{'、'.join(reasons)}），记为 N/A"
+            )
             lines.append("")
 
         if urgency_list:
@@ -1056,7 +1246,7 @@ class StatusReporter:
         return lines
 
     def _generate_strand_section(self) -> List[str]:
-        """生成 Strand Weave 节奏章节"""
+        """生成 Strand Weave 节奏章节（2026-09-18：阈值题材感知 + 短样本保护）"""
         strand_data = self.analyze_strand_weave()
 
         lines = [
@@ -1069,8 +1259,27 @@ class StatusReporter:
             lines.extend(["", "---", ""])
             return lines
 
-        # 占比统计
+        thresholds = strand_data.get("thresholds") or {}
         cfg = self.config
+        total = int(strand_data.get("total_chapters") or 0)
+        sample_adequate = bool(strand_data.get("sample_adequate"))
+
+        # 阈值来源如实披露：题材 profile 优先，回落 config 默认值时明确说明
+        if thresholds.get("source", "").startswith("genre_profile:"):
+            lines.append(
+                f"> 阈值来源：题材 profile `{thresholds.get('profile_id')}`"
+                f"（{thresholds.get('profile_name')}，经 {thresholds.get('matched_by')}"
+                f"「{thresholds.get('matched_value')}」命中）"
+            )
+        else:
+            lines.append("> 阈值来源：**config 默认值**（未匹配到题材 profile，结论可能不适用于本书题材）")
+        if thresholds.get("overridden"):
+            lines.append(
+                "> 已按题材覆盖的字段：" + "、".join(f"`{name}`" for name in thresholds["overridden"])
+            )
+        lines.append("")
+
+        # 占比统计
         lines.extend([
             "### 三线占比",
             "",
@@ -1078,27 +1287,49 @@ class StatusReporter:
             "|--------|--------|------|----------|------|"
         ])
 
+        def _ratio_status(ratio: float, low: int, high: int) -> str:
+            if not sample_adequate:
+                return "➖ 样本不足"
+            return "✅" if low <= ratio <= high else "⚠️"
+
         q = strand_data["quest"]
-        q_status = "✅" if cfg.strand_quest_ratio_min <= q["ratio"] <= cfg.strand_quest_ratio_max else "⚠️"
-        lines.append(f"| Quest（主线） | {q['count']} | {q['ratio']:.1f}% | {cfg.strand_quest_ratio_min}-{cfg.strand_quest_ratio_max}% | {q_status} |")
-
+        lines.append(
+            f"| Quest（主线） | {q['count']} | {q['ratio']:.1f}% | "
+            f"{cfg.strand_quest_ratio_min}-{cfg.strand_quest_ratio_max}% | "
+            f"{_ratio_status(q['ratio'], cfg.strand_quest_ratio_min, cfg.strand_quest_ratio_max)} |"
+        )
         f = strand_data["fire"]
-        f_status = "✅" if cfg.strand_fire_ratio_min <= f["ratio"] <= cfg.strand_fire_ratio_max else "⚠️"
-        lines.append(f"| Fire（感情） | {f['count']} | {f['ratio']:.1f}% | {cfg.strand_fire_ratio_min}-{cfg.strand_fire_ratio_max}% | {f_status} |")
-
+        lines.append(
+            f"| Fire（感情） | {f['count']} | {f['ratio']:.1f}% | "
+            f"{cfg.strand_fire_ratio_min}-{cfg.strand_fire_ratio_max}% | "
+            f"{_ratio_status(f['ratio'], cfg.strand_fire_ratio_min, cfg.strand_fire_ratio_max)} |"
+        )
         c = strand_data["constellation"]
-        c_status = "✅" if cfg.strand_constellation_ratio_min <= c["ratio"] <= cfg.strand_constellation_ratio_max else "⚠️"
-        lines.append(f"| Constellation（世界观） | {c['count']} | {c['ratio']:.1f}% | {cfg.strand_constellation_ratio_min}-{cfg.strand_constellation_ratio_max}% | {c_status} |")
-
+        lines.append(
+            f"| Constellation（世界观） | {c['count']} | {c['ratio']:.1f}% | "
+            f"{cfg.strand_constellation_ratio_min}-{cfg.strand_constellation_ratio_max}% | "
+            f"{_ratio_status(c['ratio'], cfg.strand_constellation_ratio_min, cfg.strand_constellation_ratio_max)} |"
+        )
         lines.append("")
 
-        # 连续性检查
+        if not sample_adequate:
+            lines.extend([
+                f"> ⚠️ 有效样本仅 {total} 章（占比结论需 ≥{strand_data.get('ratio_min_sample')} 章）："
+                "**本次不对占比下结论**。长篇小说开局主线占比高属正常现象。",
+                ""
+            ])
+
+        # 连续性检查（这些不受短样本影响，照常给结论）
         lines.extend([
             "### 连续性检查",
             "",
-            f"- Quest 最大连续: {strand_data['max_quest_streak']} 章（限制 ≤5）",
-            f"- Fire 最大缺失: {strand_data['max_fire_gap']} 章（限制 ≤10）",
-            f"- Constellation 最大缺失: {strand_data['max_const_gap']} 章（限制 ≤15）",
+            f"- Quest 最大连续: {strand_data['max_quest_streak']} 章"
+            f"（题材限制 ≤{thresholds.get('strand_quest_max_consecutive')}）",
+            f"- Fire 最大缺失: {strand_data['max_fire_gap']} 章"
+            f"（题材限制 ≤{thresholds.get('strand_fire_max_gap')}）",
+            f"- Constellation 最大缺失: {strand_data['max_const_gap']} 章"
+            f"（限制 ≤{thresholds.get('strand_constellation_max_gap')}，"
+            "该字段题材 profile 未定义，取自 config）",
             ""
         ])
 

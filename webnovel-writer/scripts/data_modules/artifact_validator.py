@@ -13,6 +13,7 @@ from .chapter_commit_schema import (
     ExtractionResult,
     FulfillmentResult,
     ReviewResult,
+    fulfillment_deviation_items,
 )
 
 
@@ -28,6 +29,20 @@ ERROR_PROJECTION_INCOMPLETE = "projection_incomplete"
 
 REQUIRED_PROJECTION_WRITERS = ("state", "index", "summary", "memory", "vector")
 OK_PROJECTION_STATUSES = {"done", "skipped"}
+
+# writer 返回这些 reason 时判为 skipped 而非 failed。
+# 语义是"该投影本轮**按设计**没有产出"，而不是"产出过程出错了"——
+# 所以只登记有明确归因、可被作者理解并接受的降级原因，不允许 writer
+# 用随便一个字符串把真实故障伪装成 skipped。
+# - not_required / commit_rejected：路由判定本章不需要该投影
+# - embedding_unavailable：vector 在本环境拿不到向量（未配置凭证 / 认证失败）
+# - vector_projection_disabled：作者用 VECTOR_PROJECTION_ENABLED=0 主动关闭
+SKIPPABLE_PROJECTION_REASONS = {
+    "not_required",
+    "commit_rejected",
+    "embedding_unavailable",
+    "vector_projection_disabled",
+}
 
 ARTIFACT_SCHEMAS = {
     "review_result": ReviewResult,
@@ -122,16 +137,16 @@ def _policy_issues(artifact: str, payload: dict[str, Any], path: str) -> list[di
                 )
             )
     elif artifact == "fulfillment_result":
-        missed = payload.get("missed_nodes") or []
-        if missed:
+        deviations = fulfillment_deviation_items(payload)
+        if deviations:
             issues.append(
                 _issue(
                     ERROR_MISSED_OUTLINE_NODE,
-                    message=f"fulfillment_result missed {len(missed)} planned node(s)",
+                    message=f"fulfillment_result has {len(deviations)} unresolved plan deviation(s)",
                     path=path,
-                    field="missed_nodes",
-                    impact="大纲必须节点未覆盖，提交会把偏离章节固化为事实。",
-                    repair="补写遗漏节点，或经用户裁决修改本章规划。",
+                    field="missed_nodes/node_statuses",
+                    impact="大纲节点未覆盖或与正文冲突，提交会把未解释的偏离固化为事实。",
+                    repair="先补写正文或调整章纲；如需保留偏离，请由作者在提交入口明确裁决并绑定当前版本。",
                 )
             )
     elif artifact == "disambiguation_result":
@@ -318,6 +333,16 @@ def validate_chapter_commit(path: str | Path) -> dict[str, Any]:
             )
 
     merged = merge_reports(nested_reports, artifact="chapter_commit_nested")
+    if commit_path.parent.name == "commits" and commit_path.parent.parent.name == ".story-system":
+        from .chapter_reloading import approved_reconciliation
+        try:
+            record = approved_reconciliation(commit_path.parent.parent.parent, int(payload["meta"]["chapter"]), merged["payloads"])
+            if record and payload.get("outline_snapshot", {}).get("reconciliation") == record:
+                waived = [item for item in merged["errors"] if item["type"] == ERROR_MISSED_OUTLINE_NODE]
+                merged["errors"] = [item for item in merged["errors"] if item["type"] != ERROR_MISSED_OUTLINE_NODE]
+                merged["warnings"].extend({**item, "severity": "warning", "decision_id": record["decision_id"]} for item in waived)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            report["errors"].append(_issue(ERROR_SCHEMA, message=f"reconciliation check failed: {exc}"))
     report["errors"].extend(merged["errors"])
     report["warnings"].extend(merged["warnings"])
     report["payload"] = payload

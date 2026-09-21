@@ -6,6 +6,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def _ensure_scripts_on_path() -> None:
     scripts_dir = Path(__file__).resolve().parents[2]
@@ -15,7 +17,7 @@ def _ensure_scripts_on_path() -> None:
 
 _ensure_scripts_on_path()
 
-from data_modules.run_ledger import build_write_resume_plan, record_write_step  # noqa: E402
+from data_modules.run_ledger import LedgerCorruptionError, build_write_resume_plan, load_ledger, record_write_step  # noqa: E402
 from data_modules.chapter_reloading import chapter_body_revision  # noqa: E402
 
 
@@ -42,6 +44,46 @@ def _commit_payload(status: str = "accepted", *, content_revision: str = "") -> 
             "vector": "skipped",
         },
     }
+
+
+def test_run_ledger_corruption_blocks_loading_and_resume(tmp_path: Path) -> None:
+    _make_project(tmp_path)
+    ledger_path = tmp_path / ".webnovel" / "run_ledger.json"
+    ledger_path.write_text('{"schema_version":"webnovel-run-ledger/v1",', encoding="utf-8")
+
+    try:
+        load_ledger(tmp_path)
+    except LedgerCorruptionError:
+        pass
+    else:
+        raise AssertionError("corrupt ledger must not load as an empty ledger")
+
+    plan = build_write_resume_plan(tmp_path, chapter=1)
+    assert plan["blocked"] is True
+    assert plan["resume_from"] == "blocked"
+    assert plan["needs_user_confirmation"][0]["code"] == "run_ledger_corrupt"
+
+
+def test_run_ledger_replace_failure_preserves_previous_data(tmp_path, monkeypatch):
+    import security_utils
+
+    monkeypatch.delenv("WEBNOVEL_TEST_RELAX_ATOMIC_REPLACE", raising=False)
+    record_write_step(tmp_path, chapter=1, step="draft", status="completed")
+    path = tmp_path / ".webnovel/run_ledger.json"
+    before = path.read_bytes()
+
+    def fail_replace(*args, **kwargs):
+        raise PermissionError("file busy")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(security_utils, "_replace_with_retry", fail_replace)
+        with pytest.raises(security_utils.AtomicWriteError, match="file busy"):
+            record_write_step(tmp_path, chapter=1, step="review", status="completed")
+    assert path.read_bytes() == before
+    assert set(load_ledger(tmp_path)["write"]["chapter_001"]["steps"]) == {"draft"}
+    assert not list(path.parent.glob("run_ledger_*.tmp"))
+    record_write_step(tmp_path, chapter=1, step="review", status="completed")
+    assert set(load_ledger(tmp_path)["write"]["chapter_001"]["steps"]) == {"draft", "review"}
 
 
 def test_run_ledger_records_write_step_status(tmp_path: Path) -> None:

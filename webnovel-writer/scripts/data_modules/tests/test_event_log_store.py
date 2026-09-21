@@ -203,6 +203,87 @@ def test_event_log_store_recent_and_health_use_sqlite_mirror(tmp_path):
     assert health["event_files"] == 2
 
 
+def test_event_log_store_degrades_when_index_db_is_corrupt(tmp_path):
+    """index.db 损坏时镜像写入必须降级，不能把整个 commit 一起弄挂。"""
+    store = EventLogStore(tmp_path)
+    (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".webnovel" / "index.db").write_text("this is not a sqlite database", encoding="utf-8")
+
+    store.write_events(
+        3,
+        [
+            {
+                "event_id": "evt-001",
+                "chapter": 3,
+                "event_type": "open_loop_created",
+                "subject": "三年之约",
+                "payload": {},
+            }
+        ],
+    )
+
+    assert store.last_mirror_error
+    assert (tmp_path / ".story-system" / "events" / "chapter_003.events.json").is_file()
+    log_path = tmp_path / ".webnovel" / "logs" / "event_mirror_errors.log"
+    assert "chapter=3" in log_path.read_text(encoding="utf-8")
+
+
+def test_event_log_store_mirror_events_only_creates_table_but_not_event_file(tmp_path):
+    """retry/replay 用的镜像重建：只写 sqlite，不产生 commit 侧副作用。"""
+    store = EventLogStore(tmp_path)
+
+    error = store.mirror_events_only(
+        5,
+        [
+            {
+                "event_id": "evt-005",
+                "chapter": 5,
+                "event_type": "open_loop_created",
+                "subject": "三年之约",
+                "payload": {},
+            }
+        ],
+    )
+
+    assert error == ""
+    assert not (tmp_path / ".story-system" / "events" / "chapter_005.events.json").exists()
+    conn = sqlite3.connect(tmp_path / ".webnovel" / "index.db")
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM story_events WHERE chapter = 5").fetchone()[0]
+    finally:
+        conn.close()
+    assert count == 1
+
+    # 幂等：再跑一次不产生重复行
+    assert store.mirror_events_only(
+        5,
+        [
+            {
+                "event_id": "evt-005",
+                "chapter": 5,
+                "event_type": "open_loop_created",
+                "subject": "三年之约",
+                "payload": {},
+            }
+        ],
+    ) == ""
+    conn = sqlite3.connect(tmp_path / ".webnovel" / "index.db")
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM story_events WHERE chapter = 5").fetchone()[0]
+    finally:
+        conn.close()
+    assert count == 1
+
+
+def test_event_log_store_mirror_events_only_reports_invalid_events(tmp_path):
+    store = EventLogStore(tmp_path)
+
+    error = store.mirror_events_only(3, ["not-a-json-object"])
+
+    assert error
+    assert store.last_mirror_error == error
+
+
 def test_event_log_store_recent_and_health_without_table(tmp_path):
     store = EventLogStore(tmp_path)
     (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)

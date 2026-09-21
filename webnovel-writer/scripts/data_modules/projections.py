@@ -49,7 +49,12 @@ def _projection_failed(payload: dict[str, Any]) -> bool:
     return any(str(value).startswith("failed:") or str(value) == "pending" for value in projection_status.values())
 
 
-def retry_projection(project_root: str | Path, *, chapter: int) -> dict[str, Any]:
+def retry_projection(
+    project_root: str | Path,
+    *,
+    chapter: int,
+    force_retract: bool = False,
+) -> dict[str, Any]:
     root = Path(project_root)
     path = _commit_path(root, chapter)
     payload, error = _read_commit(path)
@@ -67,24 +72,53 @@ def retry_projection(project_root: str | Path, *, chapter: int) -> dict[str, Any
         }
 
     try:
-        projected = ChapterCommitService(root).apply_projection_writers(payload)
+        latest_projection_run(root, chapter=chapter)
+        service = ChapterCommitService(root)
+        # 撤回必须发生在镜像重建之前（镜像自身也是被撤回的对象）：
+        # - commit 带 provenance.retract_required（事实被 --allow-fact-revision 改写）
+        # - force_retract（--retract，用于修复半途写坏、被旧行挡住重建的投影）
+        retract_results = service.retract_chapter_read_models(payload, force=force_retract)
+        # 先重建 story_events 镜像（只写 sqlite，不产生 commit 侧副作用），再跑投影写入器：
+        # 这一步让"镜像写失败"变成可修复 —— 旧实现只有 chapter-commit 会写镜像。
+        mirror_results = service.rebuild_event_mirror(payload)
+        projected = service.apply_projection_writers(
+            payload,
+            mirror_results=mirror_results,
+            retract_results=retract_results,
+        )
+        latest_run = latest_projection_run(root, chapter=chapter)
     except (OSError, ValueError) as exc:
         return {"schema_version": SCHEMA_VERSION, "action": "retry", "ok": False, "chapter": chapter, "error": str(exc), "commit_path": str(path), "projection_status": {}, "latest_projection_run": None}
-    latest_run = latest_projection_run(root, chapter=chapter)
+    mirror_error = str((projected.get("provenance") or {}).get("event_mirror_error") or "")
+    retract_error = _first_retract_error(retract_results)
     return {
         "schema_version": SCHEMA_VERSION,
         "action": "retry",
-        "ok": not _projection_failed(projected),
+        "ok": not _projection_failed(projected) and not mirror_error and not retract_error,
         "project_root": str(root),
         "chapter": chapter,
-        "error": "",
+        "error": mirror_error or retract_error,
         "commit_path": str(path),
         "projection_status": dict(projected.get("projection_status") or {}),
+        "retractions": retract_results,
         "latest_projection_run": latest_run,
     }
 
 
-def replay_projections(project_root: str | Path, *, start_chapter: int, end_chapter: int) -> dict[str, Any]:
+def _first_retract_error(retract_results: dict[str, Any] | None) -> str:
+    for name, result in (retract_results or {}).items():
+        if isinstance(result, dict) and str(result.get("status") or "") == "failed":
+            return f"retract_failed:{name}:{result.get('error') or ''}"
+    return ""
+
+
+def replay_projections(
+    project_root: str | Path,
+    *,
+    start_chapter: int,
+    end_chapter: int,
+    force_retract: bool = False,
+) -> dict[str, Any]:
     root = Path(project_root)
     if start_chapter <= 0 or end_chapter <= 0 or start_chapter > end_chapter:
         return {
@@ -97,7 +131,10 @@ def replay_projections(project_root: str | Path, *, start_chapter: int, end_chap
             "error": "invalid_chapter_range",
             "results": [],
         }
-    results = [retry_projection(root, chapter=chapter) for chapter in range(start_chapter, end_chapter + 1)]
+    results = [
+        retry_projection(root, chapter=chapter, force_retract=force_retract)
+        for chapter in range(start_chapter, end_chapter + 1)
+    ]
     return {
         "schema_version": SCHEMA_VERSION,
         "action": "replay",
@@ -115,15 +152,16 @@ def format_projection_report(report: dict[str, Any], output_format: str = "json"
         return json.dumps(report, ensure_ascii=False, indent=2)
     status = "OK" if report.get("ok") else "ERROR"
     if report.get("action") == "retry":
-        return "\n".join(
-            [
-                f"{status} projections retry",
-                f"chapter: {report.get('chapter')}",
-                f"commit_path: {report.get('commit_path')}",
-                f"projection_status: {report.get('projection_status')}",
-                f"error: {report.get('error') or ''}",
-            ]
-        )
+        lines = [
+            f"{status} projections retry",
+            f"chapter: {report.get('chapter')}",
+            f"commit_path: {report.get('commit_path')}",
+            f"projection_status: {report.get('projection_status')}",
+            f"error: {report.get('error') or ''}",
+        ]
+        if report.get("retractions"):
+            lines.append(f"retractions: {report.get('retractions')}")
+        return "\n".join(lines)
     lines = [
         f"{status} projections replay",
         f"range: {report.get('start_chapter')}-{report.get('end_chapter')}",
@@ -141,22 +179,33 @@ def main() -> None:
 
     retry = sub.add_parser("retry")
     retry.add_argument("--chapter", type=int, required=True)
+    retry.add_argument(
+        "--retract",
+        action="store_true",
+        help="先撤回该章已有的派生行（index 行/向量分块/story_events 镜像）再重放",
+    )
     retry.add_argument("--format", choices=["json", "text"], default="json")
 
     replay = sub.add_parser("replay")
     replay.add_argument("--from-chapter", type=int, required=True)
     replay.add_argument("--to-chapter", type=int, required=True)
+    replay.add_argument(
+        "--retract",
+        action="store_true",
+        help="每章重放前先撤回该章的派生行（修复半途写坏的投影）",
+    )
     replay.add_argument("--format", choices=["json", "text"], default="json")
 
     args = parser.parse_args()
     if args.action == "retry":
-        report = retry_projection(args.project_root, chapter=args.chapter)
+        report = retry_projection(args.project_root, chapter=args.chapter, force_retract=args.retract)
         print(format_projection_report(report, args.format))
         raise SystemExit(0 if report.get("ok") else 1)
     report = replay_projections(
         args.project_root,
         start_chapter=args.from_chapter,
         end_chapter=args.to_chapter,
+        force_retract=args.retract,
     )
     print(format_projection_report(report, args.format))
     raise SystemExit(0 if report.get("ok") else 1)

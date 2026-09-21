@@ -33,7 +33,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "{project_root}" memo
 python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "{project_root}" index get-reader-signals --limit 5 --last-n 20
 ```
 
-load-context 已含（不要重复查）：`story_contracts`（MASTER/volume/chapter/review）、`recent_summaries`、`urgent_loops`、`active_rules`、`protagonist`、`memory_pack`（追读力）、`genre_profile_excerpt`、`author_style_patterns`（/webnovel-learn 累积的作者文风修正）、`style_contract`（设定集/风格契约）。只有返回空 contracts 时才直接 Read `.story-system/*.json`。
+load-context 已含（不要重复查）：`story_contracts`（MASTER/volume/chapter/review）、`recent_summaries`、`urgent_loops`、`active_rules`、`protagonist`、`memory_pack`（追读力）、`genre_profile_excerpt`、`author_style_patterns`（/webnovel-learn 累积的作者文风修正）、`style_contract`（设定集/风格契约）、`style_profile`（/webnovel-style-learn 生成的文风档案摘要：正文现状 vs 文风目录目标）。只有返回空 contracts 时才直接 Read `.story-system/*.json`。
 
 裁决层（chapter 合同的 `reasoning` 对象）：`style_priority`、`pacing_strategy`、`genre`，必须在第 4 段消费。`chapter_focus` / `dynamic_context` 等 CSV 派生项仅作写法参考，不得覆盖章纲与 `chapter_directive.goal` 约束。
 
@@ -43,14 +43,14 @@ load-context 已含（不要重复查）：`story_contracts`（MASTER/volume/cha
 2. 确定卷号：优先 runtime contracts / latest commit；必要时兼容读取 `state.json` 投影。
 3. 按需深查：配角 → `query-entity`；规则 → `query-rules`；时间跨度 → `get-timeline` 或读时间线文件。时间规则：跨夜须过渡、倒计时不跳跃、不回跳。
 4. 伏笔：`urgent_loops` 已在基础包；`remaining ≤ 5` 或超期的必须处理，可选伏笔最多 5 条。
-5. 组装：动机 = 目标+处境+钩子压力；情绪底色 = 上章结尾+走向；可用能力 = 境界+设定禁用。合并 `reasoning` + `anti_patterns` + `author_style_patterns` + `style_contract`（作者累积的项目级文风规则，只消费、不暴露文件名）。
+5. 组装：动机 = 目标+处境+钩子压力；情绪底色 = 上章结尾+走向；可用能力 = 境界+设定禁用。合并 `reasoning` + `anti_patterns` + `author_style_patterns` + `style_contract` + `style_profile`（作者累积的项目级文风规则，只消费、不暴露文件名）。`style_profile` 里的**现状（observed）与目标（target）语义不同**：现状描述「已写成什么样」，目标描述「要模仿成什么样」，两者冲突时以目标为准，宁可少说也不要把现状当标准。
 6. 红线校验（第 6 段），任一 fail 回第 5 步重组。
 
 ## 4. 写作铁律
 
 - **三大定律**：大纲即法律、设定即物理（能力 ≤ 已有记录）、新实体由 data-agent 提取。
 - **硬约束**：每章必须有推进（目标/代价/关系变化至少一项）；上章有钩子本章必须回应；禁止占位正文。
-- **文风 / Anti-AI**：本段不灌细则——去 AI 味由起草后的润色阶段处理。任务书只给题材基调、节奏与本章情绪走向。
+- **文风 / Anti-AI**：本段不灌细则——去 AI 味由起草后的润色阶段处理。`style_profile` 只取「目标画像 + 待收敛项 + 硬约束结论」翻成口语提醒，不搬统计表与 Anti-AI 词库。任务书只给题材基调、节奏与本章情绪走向。
 
 ## 5. 输入
 

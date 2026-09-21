@@ -15,6 +15,8 @@ def _ensure_scripts_on_path() -> None:
 
 _ensure_scripts_on_path()
 
+from backup_manager import GitBackupManager
+import data_modules.chapter_reloading as chapter_reloading  # noqa: E402
 from data_modules.projection_log import append_projection_run  # noqa: E402
 from data_modules.chapter_reloading import chapter_body_revision  # noqa: E402
 from data_modules.user_report import build_user_report, render_user_report_text  # noqa: E402
@@ -134,7 +136,18 @@ def _write_success_case(project_root: Path, *, chapter: int = 1) -> None:
     _write_review(project_root, chapter=chapter)
     _write_data_artifacts(project_root)
     _write_commit(project_root, _commit_payload(chapter=chapter))
-    (project_root / ".webnovel" / "backups" / f"ch{chapter:04d}_ok").mkdir(parents=True, exist_ok=True)
+    assert GitBackupManager(str(project_root), auto_init=False)._local_backup(chapter)
+
+
+def test_empty_backup_directory_is_not_completion_evidence(tmp_path):
+    _write_success_case(tmp_path)
+    (tmp_path / ".webnovel/backup_receipts.json").write_text("{broken", encoding="utf-8")
+    (tmp_path / ".webnovel/backups/ch0001_ok").mkdir()
+    report = build_user_report(tmp_path, stage="write", chapter=1)
+    assert report["overall_status"] == "partial"
+    backup = next(item for item in report["files"] if item["label"] == "备份")
+    assert backup["status"] == "unknown"
+    assert any(item["code"] == "backup_unconfirmed" for item in report["issues"]["needs_confirmation"])
 
 
 def test_render_write_report_success(tmp_path: Path) -> None:
@@ -227,6 +240,7 @@ def test_render_write_report_projection_retry_success_is_auto_handled(tmp_path: 
         commit_path=commit_path,
     )
 
+    assert GitBackupManager(str(tmp_path), auto_init=False)._local_backup(1)
     report = build_user_report(tmp_path, stage="write", chapter=1)
 
     assert report["overall_status"] == "completed"
@@ -257,9 +271,69 @@ def test_missing_artifact_does_not_crash_and_is_not_completed(tmp_path: Path) ->
     assert "总状态：已完成。" not in text
 
 
+def test_write_report_exposes_revision_evidence_and_dependency_impacts(tmp_path: Path, monkeypatch) -> None:
+    _write_success_case(tmp_path, chapter=2)
+    state_path = tmp_path / ".webnovel" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state.setdefault("progress", {})["chapter_revisions"] = {
+        "2": {
+            "dependency_impacts": {
+                "1": ["possible 物件持有: 玄铁剑"],
+            },
+            "dependency_impact_records": {
+                "1": [
+                    {
+                        "category": "artifact",
+                        "fact_key": "玄铁剑",
+                        "reason": "物件持有 changed",
+                    }
+                ]
+            },
+        }
+    }
+    state_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(chapter_reloading, "upstream_body_blockers", lambda root, chapter: [1])
+    monkeypatch.setattr(
+        chapter_reloading,
+        "chapter_revision_evidence",
+        lambda root, chapter: {
+            "volume_plan_revision": "vol",
+            "chapter_outline_revision": "outline",
+            "contract_revision": "contract",
+            "body_content_revision": "body",
+            "previous_chapter_revision": "previous",
+            "accepted_commit_identity": "commit",
+            "recorded": {"body_content_revision": "body"},
+        },
+    )
+
+    report = build_user_report(tmp_path, stage="write", chapter=2)
+    text = render_user_report_text(report)
+
+    assert report["revision_evidence"]["current"]["body_content_revision"]
+    assert any(item["code"] == "chapter_dependency_impact" for item in report["issues"]["must_handle"])
+    assert report["dependency_impact_records"]["1"][0]["fact_key"] == "玄铁剑"
+    assert "结构化事实证据" in text
+    assert "玄铁剑" in text
+    assert "版本证据" in text
+
+
+def test_write_report_blocks_unresolved_fulfillment_reconciliation(tmp_path: Path) -> None:
+    _write_success_case(tmp_path, chapter=1)
+    state_path = tmp_path / ".webnovel" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state.setdefault("progress", {})["chapter_revisions"] = {"1": {"content_status": "needs_reconcile"}}
+    state_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+    report = build_user_report(tmp_path, stage="write", chapter=1)
+
+    assert report["overall_status"] == "needs_user"
+    issue = next(item for item in report["issues"]["must_handle"] if item["code"] == "fulfillment_reconciliation_required")
+    assert "--reconcile --dry-run" in issue["command"]
+
+
 def test_user_report_includes_log_path_only_on_failure(tmp_path: Path) -> None:
     _make_project(tmp_path)
-
     failed = build_user_report(tmp_path, stage="write", chapter=1)
     failed_text = render_user_report_text(failed)
     assert failed["overall_status"] == "failed"

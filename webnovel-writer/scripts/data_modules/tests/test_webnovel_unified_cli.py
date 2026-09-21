@@ -265,13 +265,15 @@ def test_webnovel_commit_forwards(monkeypatch, tmp_path):
         return 0
 
     monkeypatch.setattr(module, "_run_script", _fake_run_script)
-    monkeypatch.setattr(sys, "argv", ["webnovel", "--project-root", str(project_root), "chapter-commit", "--chapter", "3"])
+    monkeypatch.setattr(sys, "argv", ["webnovel", "--project-root", str(project_root), "chapter-commit", "--chapter", "3", "--expected-previous", "abc"])
 
     with pytest.raises(SystemExit) as exc:
         module.main()
 
     assert int(exc.value.code or 0) == 0
     assert called["script_name"] == "chapter_commit.py"
+    assert "--expected-previous" in called["argv"]
+    assert "abc" in called["argv"]
 
 
 def test_webnovel_story_events_forwards(monkeypatch, tmp_path):

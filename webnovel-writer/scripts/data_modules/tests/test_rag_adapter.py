@@ -497,6 +497,9 @@ def test_rag_adapter_log_query_failure_is_reported(temp_project, monkeypatch, ca
 
 
 def test_rag_adapter_cli_search_shows_degraded_warning(temp_project, monkeypatch, capsys):
+    # 凭证已配、端点回 401 → 归因为 embedding_auth_failed；
+    # 未配凭证是另一种归因（embedding_not_configured），另有专门用例覆盖。
+    monkeypatch.setenv("EMBED_API_KEY", "sk-test-key")
     monkeypatch.setattr(rag_module, "get_client", lambda config: StubClientAuthFailure())
 
     def run_cli(args):

@@ -166,6 +166,7 @@ canonical 题材集合（写入 `project_info.genre`）：都市、玄幻、仙�
 
 - `project_root` 必须由书名安全化生成：`PROJECT_ROOT="${WORKSPACE_ROOT}/${PROJECT_SLUG}"`；安全化结果为空或以 `.` 开头时自动前缀 `proj-`。
 - 禁止在插件目录（`${CLAUDE_PLUGIN_ROOT}`）下生成项目文件；禁止直接把 `WORKSPACE_ROOT` 当作 `PROJECT_ROOT`，除非用户明确指定当前目录就是书项目根。
+- **单书工作区规约：一个工作区只放一本书。** 执行前先检查 `${WORKSPACE_ROOT}` 下是否已有其它书项目（含 `.webnovel/state.json` 的子目录）；若有，先告知用户"该工作区已有一本书，新书建议另建一个工作区"，得到用户确认后再继续。初始化脚本也会打印同样的警告。
 - 初始化前必须展示并确认 `WORKSPACE_ROOT`、`PROJECT_SLUG`、`PROJECT_ROOT`。
 
 ```bash
@@ -180,10 +181,10 @@ echo "PROJECT_ROOT=${PROJECT_ROOT}"
 
 ### 1) 运行初始化脚本
 
-参数全部来自上面的采集对象（书名/题材/主角/金手指/世界观/反派/创意约束等），逐字段映射为 `webnovel.py init` 的 `--*` 选项；完整字段清单见 `references/init-collection-schema.md`，可用 `python "${SCRIPTS_DIR}/webnovel.py" init --help` 核对选项名。
+参数全部来自上面的采集对象（书名/题材/主角/金手指/世界观/反派/创意约束等），逐字段映射为 `webnovel.py init` 的 `--*` 选项；完整字段清单见 `references/init-collection-schema.md`，可用 `python -X utf8 "${SCRIPTS_DIR}/webnovel.py" init --help` 核对选项名。
 
 ```bash
-python "${SCRIPTS_DIR}/webnovel.py" init \
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" init \
   "${PROJECT_ROOT}" "{title}" "{genre}" \
   --protagonist-name "{protagonist_name}" \
   --target-words {target_words} --target-chapters {target_chapters} \

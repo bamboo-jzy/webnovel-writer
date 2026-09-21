@@ -11,6 +11,7 @@ webnovel 统一入口（面向 skills / agents 的稳定 CLI）
 典型用法（推荐，不依赖 PYTHONPATH / 不要求 cd）：
   python "<SCRIPTS_DIR>/webnovel.py" preflight
   python "<SCRIPTS_DIR>/webnovel.py" where
+  # 单书工作区规约：一个工作区只放一本书，正常不需要下面的 use（仅在指针丢失/异常时应急）
   python "<SCRIPTS_DIR>/webnovel.py" use "<PROJECT_ROOT>"
   python "<SCRIPTS_DIR>/webnovel.py" --project-root "<PROJECT_ROOT>" index stats
   python "<SCRIPTS_DIR>/webnovel.py" --project-root "<PROJECT_ROOT>" state process-chapter --chapter 100 --data @payload.json
@@ -31,7 +32,13 @@ from pathlib import Path
 from typing import Optional
 
 from runtime_compat import enable_windows_utf8_stdio, normalize_windows_path
-from project_locator import resolve_project_root, write_current_project_pointer, update_global_registry_current_project
+from project_locator import (
+    WorkspaceHasMultipleBooksError,
+    read_current_project_pointer,
+    resolve_project_root,
+    update_global_registry_current_project,
+    write_current_project_pointer,
+)
 
 from .story_runtime_health import build_story_runtime_health
 
@@ -76,11 +83,9 @@ PASSTHROUGH_TOOLS = {
     "index",
     "state",
     "rag",
-    "style",
     "entity",
     "context",
     "memory",
-    "migrate",
     "status",
     "update-state",
     "backup",
@@ -89,6 +94,8 @@ PASSTHROUGH_TOOLS = {
     "story-system",
     "memory-contract",
     "project-memory",
+    "scope-audit",
+    "style-profile",
 }
 
 
@@ -155,6 +162,8 @@ def cmd_where(args: argparse.Namespace) -> int:
 def _project_root_diagnostic(
     explicit_project_root: Optional[str], exc: FileNotFoundError
 ) -> str:
+    if isinstance(exc, WorkspaceHasMultipleBooksError):
+        return _multiple_books_diagnostic(exc)
     if explicit_project_root:
         return (
             "未找到有效书项目根目录（需要包含 .webnovel/state.json）: "
@@ -163,9 +172,29 @@ def _project_root_diagnostic(
         )
     return (
         "当前工作区还没有激活的书项目（未找到 .webnovel/state.json）。\n"
-        "请先运行 webnovel init 创建项目，或运行 webnovel use <project_root> 绑定已有书项目。\n"
+        "请先运行 /webnovel-init 创建项目。\n"
         f"detail: {exc}"
     )
+
+
+def _multiple_books_diagnostic(exc: WorkspaceHasMultipleBooksError) -> str:
+    """多书工作区的诊断：单书规约下说得清“有几本书”，而不是“这里不是项目”。"""
+    lines = [
+        "本插件按「一个工作区一本书」使用，但当前工作区里检测到多本书，无法判定该用哪一本。",
+        f"工作区: {exc.workspace_root}",
+        f"检测到 {len(exc.books)} 本书：",
+    ]
+    lines.extend(f"  - {book.name}  ({book})" for book in exc.books)
+    lines.extend(
+        [
+            "处理方式（任选其一）：",
+            "  1) 只保留一本：把其余书目录移出该工作区到各自独立的工作区（推荐）",
+            '  2) 指定其中一本：给命令加 --project-root "<书目录>"',
+            '  3) 应急绑定：webnovel use "<书目录>" 写入工作区指针（此后该工作区固定解析到它）',
+            f"detail: {exc}",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _build_preflight_report(explicit_project_root: Optional[str]) -> dict:
@@ -278,12 +307,13 @@ def cmd_projections(args: argparse.Namespace) -> int:
 
     root = _resolve_root(args.project_root)
     if args.projection_action == "retry":
-        report = retry_projection(root, chapter=args.chapter)
+        report = retry_projection(root, chapter=args.chapter, force_retract=bool(args.retract))
     else:
         report = replay_projections(
             root,
             start_chapter=args.from_chapter,
             end_chapter=args.to_chapter,
+            force_retract=bool(args.retract),
         )
     print(format_projection_report(report, args.format))
     return 0 if report.get("ok") else 1
@@ -304,10 +334,17 @@ def cmd_user_report(args: argparse.Namespace) -> int:
 
 
 def cmd_chapter_reload(args: argparse.Namespace) -> int:
-    from .chapter_reloading import format_chapter_reload_report, reload_chapter_body, validate_chapter_body
+    from .chapter_reloading import format_chapter_reload_report, reload_chapter_body, validate_chapter_body, reconcile_chapter_body
 
     root = _resolve_root(args.project_root)
-    if args.validate:
+    if args.reconcile:
+        report = reconcile_chapter_body(
+            root, args.chapter, decision=args.decision, reason=args.reason,
+            impact=args.impact, expected_input=args.expected_input, dry_run=args.dry_run,
+        )
+    elif args.decision or args.reason or args.impact is not None or args.expected_input:
+        report = {"ok": False, "action": "reload", "chapter": args.chapter, "error": "decision options require --reconcile"}
+    elif args.validate:
         report = validate_chapter_body(root, args.chapter, dry_run=args.dry_run)
     else:
         report = reload_chapter_body(root, args.chapter, source=args.source, dry_run=args.dry_run, backup_only=args.backup_only)
@@ -414,9 +451,7 @@ def cmd_use(args: argparse.Namespace) -> int:
     try:
         project_root = project_root.resolve()
     except Exception as exc:
-        import sys
         print(f"⚠️ path.resolve() 失败 ({project_root}): {exc}", file=sys.stderr)
-        project_root = project_root
 
     workspace_root: Optional[Path] = None
     if args.workspace_root:
@@ -424,12 +459,24 @@ def cmd_use(args: argparse.Namespace) -> int:
         try:
             workspace_root = workspace_root.resolve()
         except Exception as exc:
-            import sys
             print(f"⚠️ path.resolve() 失败 ({workspace_root}): {exc}", file=sys.stderr)
-            workspace_root = workspace_root
+
+    # 0) 回显原绑定：单书工作区下一次绑定可能替换掉另一本书（应急路径，需让作者看见）
+    if workspace_root is not None:
+        try:
+            previous = read_current_project_pointer(workspace_root)
+        except Exception:
+            previous = None
+        if previous is not None and previous != project_root:
+            print(f"⚠ 工作区原绑定的书项目: {previous}", file=sys.stderr)
 
     # 1) 写入工作区指针（若工作区内存在 `.claude/`）
-    pointer_file = write_current_project_pointer(project_root, workspace_root=workspace_root)
+    try:
+        pointer_file = write_current_project_pointer(project_root, workspace_root=workspace_root)
+    except FileNotFoundError as exc:
+        # 目标是无效书项目：给作者可读的诊断，而不是 traceback
+        print(_project_root_diagnostic(str(project_root), exc), file=sys.stderr)
+        return 1
     if pointer_file is not None:
         print(f"workspace pointer: {pointer_file}")
     else:
@@ -479,11 +526,21 @@ def main() -> None:
     projections_sub = p_projections.add_subparsers(dest="projection_action", required=True)
     p_projection_retry = projections_sub.add_parser("retry", help="补跑单章 projection")
     p_projection_retry.add_argument("--chapter", type=int, required=True, help="目标章节号")
+    p_projection_retry.add_argument(
+        "--retract",
+        action="store_true",
+        help="先撤回该章已有派生行（index 行/向量分块/story_events 镜像）再重放",
+    )
     p_projection_retry.add_argument("--format", choices=["json", "text"], default="json", help="输出格式")
     p_projection_retry.set_defaults(func=cmd_projections)
     p_projection_replay = projections_sub.add_parser("replay", help="按章节范围重放 projection")
     p_projection_replay.add_argument("--from-chapter", type=int, required=True, help="起始章节号")
     p_projection_replay.add_argument("--to-chapter", type=int, required=True, help="结束章节号")
+    p_projection_replay.add_argument(
+        "--retract",
+        action="store_true",
+        help="每章重放前先撤回该章派生行（修复半途写坏的投影）",
+    )
     p_projection_replay.add_argument("--format", choices=["json", "text"], default="json", help="输出格式")
     p_projection_replay.set_defaults(func=cmd_projections)
 
@@ -501,6 +558,11 @@ def main() -> None:
     reload_mode = p_chapter_reload.add_mutually_exclusive_group()
     reload_mode.add_argument("--backup-only", action="store_true")
     reload_mode.add_argument("--validate", action="store_true")
+    reload_mode.add_argument("--reconcile", action="store_true", help="预览或记录作者裁决，不修改正文或章纲")
+    p_chapter_reload.add_argument("--decision", choices=["outline_to_body", "body_to_outline", "accepted_deviation"], default="")
+    p_chapter_reload.add_argument("--reason", default="")
+    p_chapter_reload.add_argument("--impact", nargs="*", type=int, default=None, help="明确列出受影响章节；空列表也需传此参数")
+    p_chapter_reload.add_argument("--expected-input", default="", help="作者确认的预览 input_token")
     p_chapter_reload.add_argument("--format", choices=["json", "text"], default="text")
     p_chapter_reload.set_defaults(func=cmd_chapter_reload)
 
@@ -540,7 +602,10 @@ def main() -> None:
     p_run_log.add_argument("--format", choices=["json", "text"], default="json", help="输出格式")
     p_run_log.set_defaults(func=cmd_run_log)
 
-    p_use = sub.add_parser("use", help="绑定当前工作区使用的书项目（写入指针/registry）")
+    p_use = sub.add_parser(
+        "use",
+        help="【应急】把工作区绑定到指定书项目（写指针/registry）；单书工作区通常不需要",
+    )
     p_use.add_argument("project_root", help="书项目根目录（必须包含 .webnovel/state.json）")
     p_use.add_argument("--workspace-root", help="工作区根目录（可选；默认由运行环境推断）")
     p_use.set_defaults(func=cmd_use)
@@ -555,9 +620,6 @@ def main() -> None:
     p_rag = sub.add_parser("rag", help="转发到 rag_adapter")
     p_rag.add_argument("args", nargs=argparse.REMAINDER)
 
-    p_style = sub.add_parser("style", help="转发到 style_sampler")
-    p_style.add_argument("args", nargs=argparse.REMAINDER)
-
     p_entity = sub.add_parser("entity", help="转发到 entity_linker")
     p_entity.add_argument("args", nargs=argparse.REMAINDER)
 
@@ -566,9 +628,6 @@ def main() -> None:
 
     p_memory = sub.add_parser("memory", help="转发到 memory.store")
     p_memory.add_argument("args", nargs=argparse.REMAINDER)
-
-    p_migrate = sub.add_parser("migrate", help="转发到 migrate_state_to_sqlite")
-    p_migrate.add_argument("args", nargs=argparse.REMAINDER)
 
     # Pass-through to scripts
     p_status = sub.add_parser("status", help="转发到 status_reporter.py")
@@ -604,12 +663,27 @@ def main() -> None:
     p_commit.add_argument("--fulfillment-result", default="", help="fulfillment_result JSON 文件")
     p_commit.add_argument("--disambiguation-result", default="", help="disambiguation_result JSON 文件")
     p_commit.add_argument("--extraction-result", default="", help="extraction_result JSON 文件")
+    p_commit.add_argument("--expected-previous", default="", help="作者确认修订的上一 commit identity")
+    p_commit.add_argument(
+        "--allow-fact-revision",
+        action="store_true",
+        help="显式授权改写已 accepted 的事实（先撤回该章派生读模型再整章重建）",
+    )
+    p_commit.add_argument("--revision-reason", default="", help="改写事实的原因（随 commit 留痕）")
 
     p_memory_contract = sub.add_parser("memory-contract", help="转发到 memory_cli.py")
     p_memory_contract.add_argument("args", nargs=argparse.REMAINDER)
 
     p_project_memory = sub.add_parser("project-memory", help="转发到 project_memory.py")
     p_project_memory.add_argument("args", nargs=argparse.REMAINDER)
+
+    p_scope_audit = sub.add_parser("scope-audit", help="转发到 scope_audit.py（范围级回扫，只读）")
+    p_scope_audit.add_argument("args", nargs=argparse.REMAINDER)
+
+    p_style_profile = sub.add_parser(
+        "style-profile", help="转发到 style_profile.py（文风档案：正文现状 + 文风目录目标）"
+    )
+    p_style_profile.add_argument("args", nargs=argparse.REMAINDER)
 
     p_review_pipeline = sub.add_parser("review-pipeline", help="转发到 review_pipeline.py")
     p_review_pipeline.add_argument("--chapter", type=int, required=True, help="目标章节号")
@@ -674,23 +748,22 @@ def main() -> None:
         raise SystemExit(_run_data_module("state_manager", [*forward_args, *rest]))
     if tool == "rag":
         raise SystemExit(_run_data_module("rag_adapter", [*forward_args, *rest]))
-    if tool == "style":
-        raise SystemExit(_run_data_module("style_sampler", [*forward_args, *rest]))
     if tool == "entity":
         raise SystemExit(_run_data_module("entity_linker", [*forward_args, *rest]))
     if tool == "context":
         raise SystemExit(_run_data_module("context_manager", [*forward_args, *rest]))
     if tool == "memory":
         raise SystemExit(_run_data_module("memory.store", [*forward_args, *rest]))
-    if tool == "migrate":
-        raise SystemExit(_run_data_module("migrate_state_to_sqlite", [*forward_args, *rest]))
-
     if tool == "status":
         raise SystemExit(_run_script("status_reporter.py", [*forward_args, *rest]))
     if tool == "update-state":
         raise SystemExit(_run_script("update_state.py", [*forward_args, *rest]))
     if tool == "backup":
         raise SystemExit(_run_script("backup_manager.py", [*forward_args, *rest]))
+    if tool == "scope-audit":
+        raise SystemExit(_run_script("scope_audit.py", [*forward_args, *rest]))
+    if tool == "style-profile":
+        raise SystemExit(_run_script("style_profile.py", [*forward_args, *rest]))
     if tool == "archive":
         raise SystemExit(_run_script("archive_manager.py", [*forward_args, *rest]))
     if tool == "extract-context":
@@ -715,6 +788,12 @@ def main() -> None:
             return_args.extend(["--disambiguation-result", str(args.disambiguation_result)])
         if args.extraction_result:
             return_args.extend(["--extraction-result", str(args.extraction_result)])
+        if args.expected_previous:
+            return_args.extend(["--expected-previous", str(args.expected_previous)])
+        if args.allow_fact_revision:
+            return_args.append("--allow-fact-revision")
+            if args.revision_reason:
+                return_args.extend(["--revision-reason", str(args.revision_reason)])
         raise SystemExit(_run_script("chapter_commit.py", return_args))
     if tool == "memory-contract":
         raise SystemExit(_run_script("memory_cli.py", [*forward_args, *rest]))

@@ -110,6 +110,20 @@ def format_project_status(report: dict[str, Any], output_format: str = "summary"
     if warnings:
         lines.append("warnings:")
         lines.extend(f"- {item}" for item in warnings)
+    impact_records = (report.get("evidence") or {}).get("dependency_impact_records") or {}
+    if impact_records:
+        lines.append("dependency_impacts:")
+        for upstream, records in sorted(impact_records.items(), key=lambda item: str(item[0])):
+            for record in records or []:
+                category = str(record.get("category") or "fact")
+                fact_key = str(record.get("fact_key") or "")
+                reason = str(record.get("reason") or "dependency impact")
+                command = str(record.get("reload_command") or "")
+                detail = f"{category}:{fact_key}" if fact_key else category
+                line = f"- chapter {upstream}: {reason} [{detail}]"
+                if command:
+                    line += f"; next={command}"
+                lines.append(line)
     return "\n".join(lines)
 
 

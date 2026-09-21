@@ -44,6 +44,7 @@ if __package__ in {None, ""}:  # pragma: no cover - direct script entry
         read_projection_runs,
     )
     from data_modules.review_author_view import build_review_author_view
+    from data_modules import chapter_reloading as chapter_reloading_module
 else:
     from .artifact_validator import (
         OK_PROJECTION_STATUSES,
@@ -70,6 +71,7 @@ else:
         read_projection_runs,
     )
     from .review_author_view import build_review_author_view
+    from . import chapter_reloading as chapter_reloading_module
 
 
 try:
@@ -412,8 +414,17 @@ def _add_projection_issues(
     chapter: int,
     commit_payload: dict[str, Any],
 ) -> None:
-    runs = read_projection_runs(project_root, chapter=chapter)
-    latest_run = latest_projection_run(project_root, chapter=chapter)
+    try:
+        runs = read_projection_runs(project_root, chapter=chapter)
+    except (OSError, ValueError) as exc:
+        _add_manual_issue(
+            report, "must_handle", code="projection_log_corrupt", title="投影日志不可读",
+            reason=str(exc), impact="无法确认故事资料是否已完整更新。",
+            next_action="保留损坏日志，从可信备份恢复或人工修复，再运行 /webnovel-doctor。",
+            source="projection_log", path=".webnovel/projection_log.jsonl",
+        )
+        return
+    latest_run = runs[-1] if runs else None
     latest_statuses = projection_status_from_run(latest_run) if latest_run else {}
     status_source = "projection_log" if latest_statuses else "commit"
     statuses = latest_statuses or _projection_status_from_commit(commit_payload)
@@ -454,13 +465,17 @@ def _add_projection_issues(
 
 
 def _backup_evidence(project_root: Path, chapter: int) -> tuple[bool, str]:
-    backup_dir = project_root / ".webnovel" / "backups"
-    if backup_dir.is_dir():
-        patterns = (f"ch{chapter:04d}*", f"*{chapter:04d}*", f"*第{chapter}章*")
-        for pattern in patterns:
-            if any(backup_dir.glob(pattern)):
-                return True, _rel(project_root, backup_dir)
-    return False, _rel(project_root, backup_dir)
+    try:
+        from backup_manager import GitBackupManager
+
+        receipt = GitBackupManager(str(project_root), auto_init=False).verified_backup(chapter)
+    except (ImportError, OSError, ValueError, TypeError):
+        receipt = {}
+    if receipt:
+        if receipt.get("type") == "git":
+            return True, str(receipt.get("tag") or f"ch{chapter:04d}")
+        return True, str(receipt.get("snapshot") or ".webnovel/backups")
+    return False, _rel(project_root, project_root / ".webnovel" / "backups")
 
 
 def _status_from_issues(report: dict[str, Any], *, core_file_count: int = 0) -> str:
@@ -618,7 +633,7 @@ def build_write_report(project_root: Path, *, chapter: int, volume: int | None =
             "needs_confirmation",
             code="backup_unconfirmed",
             title="备份状态未确认",
-            reason="没有在 `.webnovel/backups` 找到本章备份证据。",
+            reason="未找到与当前正文和章节提交匹配的 Git tag 或有效快照。",
             impact="本章事实已生成，但回滚保障需要再确认。",
             next_action="运行备份命令或重新执行写章收尾步骤。",
             command=f"/webnovel-write {chapter}",
@@ -626,15 +641,76 @@ def build_write_report(project_root: Path, *, chapter: int, volume: int | None =
             path=backup_path,
         )
 
-    from .chapter_reloading import body_evidence, upstream_body_blockers
-    body = body_evidence(project_root, chapter)
+    body = chapter_reloading_module.body_evidence(project_root, chapter)
     try:
-        upstream = upstream_body_blockers(project_root, chapter)
+        evidence = chapter_reloading_module.chapter_revision_evidence(project_root, chapter)
+        report["revision_evidence"] = {
+            "current": {
+                key: evidence.get(key, "")
+                for key in (
+                    "volume_plan_revision",
+                    "chapter_outline_revision",
+                    "contract_revision",
+                    "body_content_revision",
+                    "previous_chapter_revision",
+                    "accepted_commit_identity",
+                )
+            },
+            "recorded": evidence.get("recorded", {}),
+        }
+    except (OSError, ValueError, TypeError):
+        report["revision_evidence"] = {"current": {}, "recorded": {}}
+    try:
+        upstream = chapter_reloading_module.upstream_body_blockers(project_root, chapter)
     except (OSError, ValueError):
         upstream = []
+    if body.get("content_status") == "needs_reconcile":
+        _add_manual_issue(
+            report,
+            "must_handle",
+            code="fulfillment_reconciliation_required",
+            title="章纲履约偏离尚未裁决",
+            reason="履约对账发现正文与章纲存在未决偏离，当前记录不能授权提交。",
+            impact="在作者明确选择前，不能把章纲或正文单方面当作可信事实。",
+            next_action="先预览对账结果，再记录绑定当前 validation input 的作者裁决。",
+            command=f"chapter-reload --chapter {chapter} --reconcile --dry-run --format json",
+            source="fulfillment",
+            path=".webnovel/tmp/fulfillment_result.json",
+        )
     if body.get("body_revision_stale") or body.get("body_revision_uncommitted") or body.get("dependency_stale") or upstream:
         affected = upstream[0] if upstream else chapter
-        _add_manual_issue(report, "must_handle", code="chapter_body_stale", title="正文修改尚未完成重载提交", reason="当前正文或前置章节不再匹配可信提交。", impact="不能沿用旧审查或继续写下一章。", next_action="保留人工正文，重新校验后确认提交。", command=f"/webnovel-chapter-reload {affected}", source="chapter-revision")
+        _add_manual_issue(
+            report,
+            "must_handle",
+            code="chapter_body_stale",
+            title="正文修改尚未完成重载提交",
+            reason="当前正文或前置章节不再匹配可信提交。",
+            impact="不能沿用旧审查或继续写下一章。",
+            next_action="保留人工正文，重新校验后确认提交。",
+            command=f"/webnovel-chapter-reload {affected}",
+            source="chapter-revision",
+        )
+    state_for_impacts = chapter_reloading_module.read_object(project_root / ".webnovel" / "state.json", optional=True)
+    current_revision_entry = chapter_reloading_module.revision_entry(state_for_impacts, chapter)
+    report["dependency_impact_records"] = current_revision_entry.get("dependency_impact_records", {})
+    for upstream_chapter in upstream:
+        reasons = current_revision_entry.get("dependency_impacts", {}).get(str(upstream_chapter), [])
+        records = current_revision_entry.get("dependency_impact_records", {}).get(str(upstream_chapter), [])
+        impact_text = "；".join(str(reason) for reason in reasons) or "可能沿用旧的角色、物件、关系、地点、时间线或开放问题事实。"
+        if records:
+            impact_text += "（已生成结构化事实证据）"
+        _add_manual_issue(
+            report,
+            "must_handle",
+            code="chapter_dependency_impact",
+            title=f"第 {upstream_chapter} 章修订影响当前章节",
+            reason="前置章节 revision 已变化，当前章节需要重新核对承接事实。",
+            impact=impact_text,
+            next_action=f"检查第 {chapter} 章章纲和合同，再运行正文重载流程。",
+            command=f"/webnovel-chapter-reload {chapter}",
+            source="dependency-impact",
+            path=".webnovel/state.json",
+        )
     report["overall_status"] = _status_from_issues(report, core_file_count=core_files)
     if report["overall_status"] == STATUS_COMPLETED:
         report["next_actions"].append(
@@ -925,6 +1001,31 @@ def render_user_report_text(report: dict[str, Any]) -> str:
             lines.append(f"- {label}：{path_part}{status_text}{suffix}")
     else:
         lines.append("- 暂无可确认的产物。")
+
+    evidence = report.get("revision_evidence") or {}
+    current_evidence = evidence.get("current") if isinstance(evidence, dict) else {}
+    recorded_evidence = evidence.get("recorded") if isinstance(evidence, dict) else {}
+    if isinstance(current_evidence, dict) and current_evidence:
+        evidence_labels = {
+            "volume_plan_revision": "卷纲",
+            "chapter_outline_revision": "章纲",
+            "contract_revision": "合同",
+            "body_content_revision": "正文",
+            "previous_chapter_revision": "前置章节",
+            "accepted_commit_identity": "accepted commit",
+        }
+        mismatched = [
+            evidence_labels[key]
+            for key in evidence_labels
+            if current_evidence.get(key)
+            and recorded_evidence.get(key)
+            and current_evidence.get(key) != recorded_evidence.get(key)
+        ]
+        if mismatched:
+            delimiter = "、"
+            lines.append(f"- 版本证据：不一致项为{delimiter.join(mismatched)}，需要重新重载或校验。")
+        else:
+            lines.append("- 版本证据：卷纲、章纲、合同、正文和前置章节证据已记录。")
 
     issues = report.get("issues") or {}
     lines.extend(["", "二、过程中遇到的问题与异常耗时"])

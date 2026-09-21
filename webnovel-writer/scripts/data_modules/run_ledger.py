@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,8 +18,10 @@ if __package__ in {None, ""}:  # pragma: no cover - direct script entry
 
 try:
     from chapter_paths import find_chapter_file
+    from security_utils import HAS_FILELOCK, FileLock, atomic_write_json
 except ImportError:  # pragma: no cover
     from scripts.chapter_paths import find_chapter_file
+    from scripts.security_utils import HAS_FILELOCK, FileLock, atomic_write_json
 
 if __package__ in {None, ""}:  # pragma: no cover - direct script entry
     from data_modules.artifact_validator import OK_PROJECTION_STATUSES, REQUIRED_PROJECTION_WRITERS
@@ -35,8 +38,20 @@ LEDGER_REL = Path(".webnovel") / "run_ledger.json"
 WRITE_STEPS = ("draft", "review", "data", "commit", "projection", "backup")
 
 
+class LedgerCorruptionError(ValueError):
+    """The run ledger exists but cannot be trusted."""
+
+
 def ledger_path(project_root: str | Path) -> Path:
     return Path(project_root) / LEDGER_REL
+
+
+def _ledger_lock(path: Path):
+    if not HAS_FILELOCK:
+        raise OSError("run ledger requires filelock for safe concurrent updates")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return FileLock(str(path.with_suffix(path.suffix + ".lock")), timeout=10)
+
 
 
 def _now_iso() -> str:
@@ -51,20 +66,43 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def load_ledger(project_root: str | Path) -> dict[str, Any]:
-    payload = _read_json(ledger_path(project_root))
-    if payload.get("schema_version") != SCHEMA_VERSION:
+def _read_ledger(path: Path) -> dict[str, Any]:
+    if not path.exists():
         return {"schema_version": SCHEMA_VERSION, "write": {}}
-    payload.setdefault("write", {})
-    if not isinstance(payload["write"], dict):
-        payload["write"] = {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LedgerCorruptionError(f"run ledger 损坏: {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise LedgerCorruptionError(f"run ledger 损坏: {path}: JSON root is not object")
+    if payload.get("schema_version") != SCHEMA_VERSION:
+        raise LedgerCorruptionError(
+            f"run ledger schema 不受支持: {payload.get('schema_version')!r}"
+        )
+    if not isinstance(payload.get("write"), dict):
+        raise LedgerCorruptionError("run ledger 损坏: write must be object")
+    for key, run in payload["write"].items():
+        if not isinstance(run, dict) or not isinstance(run.get("steps"), dict):
+            raise LedgerCorruptionError(f"run ledger 损坏: {key}.steps must be object")
+        for step, entry in run["steps"].items():
+            if step not in WRITE_STEPS or not isinstance(entry, dict) or not isinstance(entry.get("status"), str):
+                raise LedgerCorruptionError(f"run ledger 损坏: invalid step {key}.{step}")
     return payload
+
+
+def load_ledger(project_root: str | Path) -> dict[str, Any]:
+    path = ledger_path(project_root)
+    if not path.exists():
+        return {"schema_version": SCHEMA_VERSION, "write": {}}
+    with _ledger_lock(path):
+        return _read_ledger(path)
 
 
 def save_ledger(project_root: str | Path, ledger: dict[str, Any]) -> Path:
     path = ledger_path(project_root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(ledger, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    with _ledger_lock(path):
+        atomic_write_json(path, ledger, use_lock=False, backup=True)
     return path
 
 
@@ -114,28 +152,31 @@ def record_write_step(
     if step not in WRITE_STEPS:
         raise ValueError(f"unknown write step: {step}")
     root = Path(project_root)
-    ledger = load_ledger(root)
-    run = _write_run(ledger, chapter, mode)
-    input_signatures = {
-        str(name): file_signature(path)
-        for name, path in (inputs or {}).items()
-    }
-    output_signatures = {
-        str(name): file_signature(path)
-        for name, path in (outputs or {}).items()
-    }
-    entry = {
-        "step": step,
-        "status": status,
-        "recorded_at": _now_iso(),
-        "duration_ms": int(duration_ms or 0),
-        "inputs": input_signatures,
-        "outputs": output_signatures,
-        "problems": list(problems or []),
-        "auto_handled": list(auto_handled or []),
-    }
-    run["steps"][step] = entry
-    save_ledger(root, ledger)
+    path = ledger_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _ledger_lock(path):
+        ledger = _read_ledger(path)
+        run = _write_run(ledger, chapter, mode)
+        input_signatures = {
+            str(name): file_signature(path)
+            for name, path in (inputs or {}).items()
+        }
+        output_signatures = {
+            str(name): file_signature(path)
+            for name, path in (outputs or {}).items()
+        }
+        entry = {
+            "step": step,
+            "status": status,
+            "recorded_at": _now_iso(),
+            "duration_ms": int(duration_ms or 0),
+            "inputs": input_signatures,
+            "outputs": output_signatures,
+            "problems": list(problems or []),
+            "auto_handled": list(auto_handled or []),
+        }
+        run["steps"][step] = entry
+        atomic_write_json(path, ledger, use_lock=False, backup=True)
     return entry
 
 
@@ -196,10 +237,11 @@ def _projection_done(project_root: Path, chapter: int) -> bool:
 
 
 def _backup_exists(project_root: Path, chapter: int) -> bool:
-    backup_dir = project_root / ".webnovel" / "backups"
-    if not backup_dir.is_dir():
+    try:
+        from backup_manager import GitBackupManager
+        return bool(GitBackupManager(str(project_root), auto_init=False).verified_backup(int(chapter)))
+    except (ImportError, OSError, ValueError, TypeError):
         return False
-    return any(backup_dir.glob(f"ch{chapter:04d}*"))
 
 
 def _latest_contract_mtime(project_root: Path, chapter: int) -> int:
@@ -217,7 +259,19 @@ def build_write_resume_plan(
     mode: str = "default",
 ) -> dict[str, Any]:
     root = Path(project_root)
-    ledger = load_ledger(root)
+    try:
+        ledger = load_ledger(root)
+    except LedgerCorruptionError as exc:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "stage": "write",
+            "chapter": int(chapter),
+            "mode": mode or "default",
+            "resume_from": "blocked",
+            "steps": [],
+            "needs_user_confirmation": [{"code": "run_ledger_corrupt", "message": str(exc)}],
+            "blocked": True,
+        }
     run = ((ledger.get("write") or {}).get(_chapter_key(chapter)) or {})
     if not isinstance(run, dict):
         run = {}
@@ -292,7 +346,19 @@ def build_write_resume_plan(
     )
     steps.append({"step": "commit", "action": "skip" if accepted_done else "run", "reason": commit_reason})
 
-    projection_done = bool(commit_status == "accepted" and _projection_done(root, chapter))
+    try:
+        projection_done = bool(commit_status == "accepted" and _projection_done(root, chapter))
+    except (OSError, ValueError) as exc:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "stage": "write",
+            "chapter": int(chapter),
+            "mode": mode or "default",
+            "resume_from": "blocked",
+            "steps": [],
+            "needs_user_confirmation": [{"code": "projection_log_corrupt", "message": str(exc)}],
+            "blocked": True,
+        }
     projection_action = "skip" if projection_done else ("retry" if accepted_done else "run")
     projection_reason = (
         "资料更新已完成"

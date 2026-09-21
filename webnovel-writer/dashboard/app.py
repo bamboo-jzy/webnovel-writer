@@ -820,15 +820,19 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
         }
 
     # ===========================================================
-    # API：文档浏览（正文/大纲/设定集 —— 只读）
+    # API：文档浏览（正文/大纲/设定集/文风 —— 只读）
     # ===========================================================
+
+    #: 允许浏览的顶层目录。与 `init_project.py` 建出的目录对齐（`文风/` 是参考文本，
+    #: 作者自己放进来的东西，只读展示不涉及任何写入）。新增目录改这一处即可。
+    doc_dirs = ("正文", "大纲", "设定集", "文风")
 
     @app.get("/api/files/tree")
     def file_tree():
-        """列出 正文/、大纲/、设定集/ 三个目录的树结构。"""
+        """列出 正文/、大纲/、设定集/、文风/ 四个目录的树结构。"""
         root = _get_project_root()
         result = {}
-        for folder_name in ("正文", "大纲", "设定集"):
+        for folder_name in doc_dirs:
             folder = root / folder_name
             if not folder.is_dir():
                 result[folder_name] = []
@@ -838,14 +842,14 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
 
     @app.get("/api/files/read")
     def file_read(path: str):
-        """只读读取一个文件内容（限 正文/大纲/设定集 目录）。"""
+        """只读读取一个文件内容（限 正文/大纲/设定集/文风 目录）。"""
         root = _get_project_root()
         resolved = safe_resolve(root, path)
 
-        # 二次限制：只允许三大目录
-        allowed_parents = [root / n for n in ("正文", "大纲", "设定集")]
+        # 二次限制：只允许白名单目录
+        allowed_parents = [root / n for n in doc_dirs]
         if not any(_is_child(resolved, p) for p in allowed_parents):
-            raise HTTPException(403, "仅允许读取 正文/大纲/设定集 目录下的文件")
+            raise HTTPException(403, "仅允许读取 正文/大纲/设定集/文风 目录下的文件")
 
         if not resolved.is_file():
             raise HTTPException(404, "文件不存在")

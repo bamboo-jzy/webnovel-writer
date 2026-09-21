@@ -54,10 +54,11 @@ REGISTERED_CLI_SUBCOMMANDS = {
     "where", "preflight", "project-status", "doctor", "write-gate", "projections", "user-report",
     "run-ledger", "run-log", "use",
     "index", "state", "rag", "style", "entity", "context", "memory",
-    "migrate", "status", "update-state", "backup", "archive",
+    "status", "update-state", "backup", "archive",
     "init", "extract-context", "memory-contract", "project-memory", "review-pipeline",
     "placeholder-scan", "master-outline-sync", "volume-reload", "chapter-reload",
     "story-system", "chapter-commit", "story-events", "knowledge",
+    "scope-audit", "style-profile",
 }
 
 

@@ -371,6 +371,8 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" use
 
 审查缺失→重跑 Step 3。摘要/状态/记忆缺失→重跑 Step 5。润色失真→回 Step 4 修复后重跑 Step 5。
 
+作者说**整章不要了**（不是"改几处"，是整章作废重写）时，不要走上面的补跑，也不要走 `/webnovel-chapter-reload`（那条链保留章号、重载人工正文）：走 `/webnovel-chapter-discard`。该章**已 accepted** 时它走版本点回退（等价于先 `git status --short` 确认工作区干净，再 `git switch -c rewrite-from-ch0009 ch0009` 抛弃第 10 章）；**还没 accepted** 时它把正文、本章 artifacts 与章级 state 归档后直接删除。`chNNNN` 是"第 N 章**完成后**"的状态，所以抛弃第 10 章要退到 `ch0009`，退到 `ch0010` 只会把这章原样留着。两条路都只允许处理最后一章，有后续章会被 `downstream_chapters_exist` 阻断。之后按正常流程重写第 10 章即可，正文、commit、索引行、state 与摘要一起回到第 9 章完成时；被抛弃的提交和 `ch0010` tag 仍留在仓库里，`git show ch0010:"正文/第10章-*.md"` 随时可取回。第 1 章没有 `ch0000`，改用仓库初始提交（分支 `rewrite-from-start`）。完整清单与边界见运维手册的「抛弃刚写完的一章」。
+
 ## 作者友好最终报告契约
 
 最终回复必须面向作者，不输出原始 JSON、traceback 或长命令日志。使用固定三段式，并以一句总状态开头：

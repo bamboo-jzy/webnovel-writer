@@ -2,6 +2,33 @@
 
 这里记录每个正式版本对作者和维护者的影响。发布说明优先面向中文网文作者：先说写作体验有什么变化，再补维护者关心的技术细节。
 
+## v6.4.0 - 一章不要了，直接抛弃
+
+发版范围：`v6.3.0..v6.4.0`。
+
+### 给作者看的变化
+
+- **新增 `/webnovel-chapter-discard`：一章不要了，直接抛弃**。以前只能自己敲 git 命令，现在按章的状态自动选路：**还没定稿**的章（只有正文和草稿）会被归档到 `.webnovel/discarded/chapter_NNN_<时间戳>/` 后删除，连同这一章的审查报告一起清掉，章纲保留，重写就行；**已经定稿**的章走版本点回退，整棵树回到上一章完成时——回退不删除任何提交，原分支仍指向被你抛弃的那次提交，随时可以取回来。
+- 只允许抛弃最后一章。中间章会让后面的章失去"前置章"，系统会直接拦下并说明原因，而不是删完才发现序列断了洞。
+- 抛弃前一律先预览：系统会告出这一章现在是什么状态、能走哪条路、会动哪些文件；确认后才执行。工作区有未提交改动时，回退会被拦下，不会顺手把你的改动一起丢掉。
+- 第 1 章也能抛弃了：没有 `ch0000` 版本点时，自动回退到仓库初始提交（分支名 `rewrite-from-start`）。
+
+### 是否需要改旧项目
+
+不需要。已有书项目继续使用，无需迁移 `.story-system/` 或 `.webnovel/` 数据。
+
+`.webnovel/discarded/` 是新增的**按需创建**目录：从没抛弃过章的旧项目不会出现它，它也不进版本点。唯一的行为习惯变化是：弃稿现在有了正式命令，写章失败恢复的文档改为指向它（原先只给手工 git 命令）。
+
+### 给维护者
+
+- 新模块 `scripts/data_modules/chapter_discard.py`：`plan_chapter_discard` / `discard_chapter_draft` / `rollback_chapter` / `format_chapter_discard_report`。
+- 新子命令 `chapter-discard`（`--chapter` 必填，`--dry-run` / `--draft` / `--rollback` 三选一）。
+- **已 accepted 章刻意不做外科手术式删除**：`state.json` 的 `plot_threads` / `strand_tracker` / `protagonist_state` / `world_settings` 是累计字段，`entities.first_appearance` / `last_appearance` 也不随 `retract()` 回退——只删正文与投影行会留下"读模型说没写过、状态记得写过"的书。已提交章一律走版本点回退。
+- 草稿删除的重算口径与 `StateProjectionWriter` 对齐（`current_chapter` 取未排除本章的已写章最大值，`total_words` 只数 `chapter_committed` 章）。
+- `run_ledger.json` 损坏只告警不阻断（派生缓存）；归档目录 `.webnovel/discarded/` 不进版本点，按需创建。
+- 测试与文档：新增 `scripts/data_modules/tests/test_chapter_discard.py`（22 条）、行为评测 `skill_chapter_discard_contract`、`REGISTERED_CLI_SUBCOMMANDS` 登记 `chapter-discard`；skill 口径 16 → 17 同步 6 处文档（两个 `README.md`、`docs/architecture/overview.md`、`docs/operations/operations.md`、`docs/guides/commands.md`、`references/index/reference-loading-map.md`）+ `skill-gap-assessment` 附录 A.7。
+- `test_chapter_discard.py` 的 `_assert_worktree_restored()`：本机沙箱（`conftest.py:21` 把 `TMP` 钉在仓库内 `.tmp/pytest/`）会吞掉 `git switch` 落盘，仅在「HEAD == 版本点 且 索引含该文件 且 `git status` 记为 ` D`」时 skip，避免把环境缺陷误判成产品缺陷。
+
 ## v6.3.0 - 文风有档案，漏章藏不住，已定稿的事实也能改
 
 发版范围：`v6.2.1..v6.3.0`。

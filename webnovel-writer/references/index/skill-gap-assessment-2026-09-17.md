@@ -27,11 +27,12 @@
 
 ## 一、现状基线
 
-| 分组 | Skill（15 个） |
+| 分组 | Skill（17 个） |
 |------|----------------|
 | 生产链（6） | init / plan / chapter-plan / write / review / query |
 | 修订重载链（5） | outline-revise / volume-revise / volume-reload / chapter-revise / chapter-reload |
-| 辅助（4） | learn / dashboard / doctor / **audit**（2026-09-18 新增，批一：S1/S4/S5） |
+| 弃稿链（1） | **chapter-discard**（2026-09-21 新增：草稿归档删除 / 已提交章版本点回退，只处理最后一章，见 A.7） |
+| 辅助（5） | learn / **style-learn**（2026-09-21 新增，见 A.5） / dashboard / doctor / audit |
 
 Agent（4 个）：context-agent、data-agent、reviewer、deconstruction-agent（另有 `agents/evals/`）。
 数据层已有但**无 skill 入口**的能力：`index get-hook-type-stats` / `get-pattern-usage-stats` / `get-overdue-debts` / `get-chapter-reading-power`（4 个统计子命令）、`chapter_reading_power` 表——目前只有 `dashboard/app.py` 直读展示。（原列的 `style_sampler`（`webnovel.py style`）已于 2026-09-21 整体删除，见附录 A.6。）
@@ -262,6 +263,24 @@ E1 / E2 / E3 / E5 / E6 已处置（见附录 A）。剩余：
 **测试环境补齐**：本机管理版解释器缺 `fastapi/httpx/watchdog`，3 个 dashboard 测试此前一直跳过。本次在 `.../python/envs/dash`（`--system-site-packages`）装了这三个包，dashboard 测试首次可跑——顺带把 `文风/` 加入只读浏览白名单（`dashboard/app.py` 抽 `doc_dirs` 单一常量，前端徽章同步），并补了 2 条白名单守护测试（`文风/` 可读、白名单外目录 403）。
 
 **守护测试**：`test_scope_audit.py` 新增 8 条（档案优先于自比、`range` 可主动取回、无档案回落并写明、`profile` 模式拒绝静默回落、样本不足拒绝、损坏/异族 schema 忽略、陈旧与越权口径提示、**消费 `build_profile` 真产出的集成口径**）；`test_coverage_boost.py` 的 `style` 反向护栏；`test_dashboard_security.py` 的 2 条白名单测试。
+
+---
+
+### A.7 新增 `webnovel-chapter-discard`（2026-09-21，非缺口推导）
+
+「整章不要了」此前只能让作者自己敲 `git switch -c rewrite-from-chXXXX chXXXX`，且没有任何前置检查——脏工作区、中间章、缺版本点都会在执行一半时才暴露。本次把它变成一等能力，同时**明确拒绝**给已提交章做外科手术式删除。
+
+| 决策 | 理由 |
+|---|---|
+| 只允许抛弃**最后一章** | 中间章会让后续章失去前置章，必须连带回退或重写，超出该能力范围 → `downstream_chapters_exist` 阻断 |
+| 草稿走归档删除，不走 git | 未提交章没有版本点；删除前整批归档到 `.webnovel/discarded/chapter_NNN_<时间戳>/`（保持项目内相对路径，可原样复制回去），再删正文 / 本章 artifacts / 审查报告 / 非 accepted commit，并清理章级 state |
+| 已提交章走版本点回退 | `state.json` 的 `plot_threads` / `strand_tracker` / `protagonist_state` / `world_settings` 是累计字段，`index.db` 的 `entities.first_appearance` / `last_appearance` 也不随 `retract()` 回退（`index_projection_writer.py` 已知取舍）→ 只删正文与投影行会留下「读模型说没写过、状态记得写过」的书 |
+| 第 1 章回退到仓库初始提交 | 没有 `ch0000`；`git rev-list --max-parents=0 HEAD` 唯一时用它，分支名 `rewrite-from-start`；不唯一则阻断转人工 |
+| 回退不删除提交 | `git switch -c` 只移动 HEAD，原分支仍指向被抛弃的提交，`git show <原分支>:正文/第N章-*.md` 可取回 |
+
+**落地证据**：`scripts/data_modules/chapter_discard.py`；`webnovel.py` 新增 `chapter-discard` 子命令（`--dry-run` / `--draft` / `--rollback`）；`skills/webnovel-chapter-discard/SKILL.md`；`scripts/data_modules/tests/test_chapter_discard.py`（22 条）；`evals/fixtures/behavior/fast.json` 的 `skill_chapter_discard_contract`；6 处 skill 文档同步（两个 README / overview / operations / commands / reference-loading-map，16 → 17）。
+
+**测试环境注记**：本机文件系统虚拟化会让「仓库树内 `git switch`」吞掉落盘，故 git 行为先在**工作区外**（`%TEMP%`）端到端验证（草稿删除 / 已提交拒绝 / 中间章拒绝 / 版本点回退 / 第 1 章回退初始提交 / 脏工作树拒绝 六组，全绿），再落 pytest。
 
 ---
 

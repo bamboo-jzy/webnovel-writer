@@ -87,6 +87,31 @@
       ]
     },
     {
+      "id": "skill_chapter_discard_contract",
+      "type": "skill_contract",
+      "skill": "webnovel-chapter-discard",
+      "description": "Discarding a chapter is tail-only: drafts are archived then deleted, accepted chapters roll back to the previous version point without rewriting history.",
+      "required": [
+        "chapter-discard",
+        "--dry-run",
+        "--draft",
+        "--rollback",
+        "只允许抛弃最后一章",
+        "ch{N-1}",
+        "rewrite-from-start",
+        ".webnovel/discarded/",
+        "不删除任何提交",
+        "downstream_chapters_exist",
+        "working_tree_dirty",
+        "chapter_committed"
+      ],
+      "forbidden_patterns": [
+        "git reset --hard",
+        "git checkout ch",
+        "rm -rf"
+      ]
+    },
+    {
       "id": "skill_write_contract",
       "type": "skill_contract",
       "skill": "webnovel-write",

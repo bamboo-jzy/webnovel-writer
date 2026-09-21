@@ -87,7 +87,7 @@ project-root/
 
 ```text
 ${CLAUDE_PLUGIN_ROOT}/
-├── skills/       # 16 个 Skill 命令定义
+├── skills/       # 17 个 Skill 命令定义
 ├── agents/       # 4 个 Agent 定义
 ├── scripts/      # Python 脚本与数据模块
 ├── hooks/        # Claude Code 会话钩子
@@ -335,5 +335,61 @@ git switch -c rewrite-from-ch0030 ch0030    # 工作树整体回到 ch0030 状�
 - 回退点之后仍存在 `chNNNN` tag，但 `chNNNN` 的语义是"该章最新已备份状态"，不是不可变历史点。重写同一章号时 `backup` 先归档旧点（`chNNNN-prev-<时间戳>`）再把 tag 前移到新提交，因此不会失败、也不需要手工删除 tag；要取回某个被前移的状态用 `git switch -c <分支> chNNNN-prev-<时间戳>`
 - `chNNNN-prev-<时间戳>` 只增不改，是真正不可变的历史点；`backup --list` 把它们列在对应章节版本点下方
 - 回退后重新运行 doctor 的 Story System / projection health 检查；正文与 `.webnovel/state.json` 不一致时不得继续续写
+
+### 抛弃刚写完的一章
+
+`/webnovel-chapter-discard` 按章的状态自动选路，两条路都**只允许处理最后一章**（`downstream_chapters_exist` 直接阻断）：
+
+| 章的状态 | 路径 | 结果 |
+|---|---|---|
+| 尚未 accepted（只有正文、草稿项或 rejected commit） | `--draft` | 正文、本章 artifacts、审查报告先整批归档到 `.webnovel/discarded/chapter_NNN_<时间戳>/`（保持项目内相对路径，可原样复制回去），再删除；`state.json` 的章级条目清理并重算 `current_chapter` / `total_words`；`大纲/` 不动 |
+| 已 accepted | `--rollback` | 版本点回退：整棵树回到第 N-1 章完成时；不删除任何提交 |
+
+```bash
+python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" --project-root "${PROJECT_ROOT}" \
+  chapter-discard --chapter 10 --dry-run --format json      # 先预览分类与阻塞项
+python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" --project-root "${PROJECT_ROOT}" \
+  chapter-discard --chapter 10 --draft --reason "写崩了" --format json
+python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" --project-root "${PROJECT_ROOT}" \
+  chapter-discard --chapter 10 --rollback --reason "整章作废" --format json
+```
+
+回退这一路的手工等价命令如下，**章号要往前退一位**：
+
+```bash
+cd "${PROJECT_ROOT}"
+git status --short                        # 必须为空
+git log --oneline -3                      # 确认最新提交是 "Chapter N"
+git switch -c rewrite-from-ch0009 ch0009  # 抛弃第 10 章：回到 ch0009，不是 ch0010
+```
+
+`chNNNN` 的语义是"第 N 章**完成后**已备份的状态"（`backup --chapter N` 在 `/webnovel-write` Step 6 执行），所以抛弃第 N 章要回到 `ch{N-1}`。回到 `chNNNN` 只会把这一章原样留着——这是最容易踩的一步。
+
+`git switch` 之后工作树逐项回到第 N-1 章完成时：
+
+| 内容 | 结果 |
+|---|---|
+| `正文/第N章*.md` | 删除 |
+| `.story-system/commits/chapter_00N.commit.json` | 删除 |
+| `.webnovel/state.json`（含 `chapter_revisions`） | 回到第 N-1 章 |
+| `.webnovel/index.db`（chapters / scenes / appearances / state_changes / relationships） | 回到第 N-1 章 |
+| `.webnovel/summaries/`、`projection_log.jsonl` | 回到第 N-1 章 |
+| 被抛弃的提交、`chNNNN` tag、原分支 | **全部保留**，随时可取回 |
+
+`大纲/`、`设定集/` 也在版本点内：如果写这一章时顺手改过章纲，那些改动同样会被撤掉。想看这次回退究竟丢掉了什么：
+
+```bash
+git diff --stat HEAD ch0010              # 被抛弃的改动清单
+git show ch0010:"正文/第10章-*.md"        # 取回被抛弃的正文
+```
+
+不在版本点内、回退后会残留的本地状态（都不影响续写，但要知道它们旧了）：`.webnovel/run_ledger.json`、`.webnovel/backup_receipts.json`、`.webnovel/logs/`、`.webnovel/reports/`、`.webnovel/tmp/`。实测正文文件消失后 `run-ledger write-resume --chapter N` 回到 `resume_from=draft`、六个步骤全是 `run`，不会误报"本章已完成"。断点判定以文件签名为准，不依赖账本里的完成标记。
+
+接着按正常流程重写即可（`/webnovel-write N`）。重写完成后再 `backup --chapter N`，旧 `chNNNN` 自动归档为 `chNNNN-prev-<时间戳>`、tag 前移到新提交；被抛弃的正文可用 `git show chNNNN-prev-<时间戳>:"正文/第N章*.md"` 取回。
+
+两个边界：
+
+- **第 1 章**没有 `ch0000`。`chapter-discard --rollback` 会自动改为回退到仓库初始提交（`git rev-list --max-parents=0 HEAD`，分支名 `rewrite-from-start`）；手工做时用 `git log --oneline` 找到 `Chapter 1` 那个提交之前的提交，再 `git switch -c rewrite-from-start <sha>`。初始提交不唯一时会阻断，转人工。
+- **这一章还没有版本点**（写章中途失败、没跑到 Step 6，只留下 commit 和索引行）。先补一个：`backup --chapter N`，再把上面流程走一遍。不要手工删文件了事——`projections retry --chapter N --retract` 靠 commit json 定位章号，commit json 一删，`index.db` / `vectors.db` / `story_events` 里那一章的派生行就再没有干净的清理入口。
 
 无 Git 环境下列出的 `snapshot_chNNNN_*` 是离线副本（带 `snapshot/v1` manifest 与 SHA-256，只保留最近 10 份），没有配套恢复命令，需要手工复制文件；这个模式下恢复能力由作者自行保证。

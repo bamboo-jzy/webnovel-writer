@@ -5,7 +5,7 @@
 > 不登记普通项目数据读取，例如 `.webnovel/state.json`、`设定集/*.md`、`大纲/*.md`、`index.db`。
 > **「Reference」列永远是外部参考文件，不登记 SKILL.md 自身。**
 >
-> 覆盖度：**16/16 skill**（2026-09-21 复核，新增 `webnovel-style-learn`）。维护方式：改任一 `SKILL.md` 的 reference 表后，必须回写本文件；取证脚本见 `.workbuddy/tmp/audit_reference_usage.py`。
+> 覆盖度：**17/17 skill**（2026-09-21 复核，新增 `webnovel-chapter-discard`）。维护方式：改任一 `SKILL.md` 的 reference 表后，必须回写本文件；取证脚本见 `.workbuddy/tmp/audit_reference_usage.py`。
 
 ---
 
@@ -106,6 +106,7 @@
 | webnovel-volume-reload | 只校验并重算三份卷级产物的 revision |
 | webnovel-chapter-revise | 只改 `大纲/第N章-*.md`；合同刷新走 `story-system`（见上一节） |
 | webnovel-chapter-reload | 只重载人工正文并重新校验 artifacts；合同由 CLI 侧处理 |
+| webnovel-chapter-discard | 只跑 `chapter-discard` 的预览/草稿删除/版本点回退；归档与 `git switch` 都在 CLI 内完成，不加载独立 reference |
 | webnovel-dashboard | 只读面板启动流程，不加载独立 reference；核心校验接口是 `/api/story-runtime/health` 与 `/api/preflight` |
 | webnovel-learn | 只读 state 后追加 `.webnovel/project_memory.json` |
 | webnovel-doctor | 只跑只读体检与索引对账，不加载独立 reference |

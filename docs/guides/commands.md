@@ -120,6 +120,29 @@ python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" --project-root "${PRO
 
 `outline_to_body` / `body_to_outline` 只表示后续处理方向，不直接放行提交。任何 artifact、正文、章纲或合同变化都会使 token 失效，必须重新预览和校验；未裁决时保持 `needs_reconcile` / `blocked`。
 
+### `/webnovel-chapter-discard [章号]`
+
+抛弃一章正文。只允许处理**最后一章**；中间章会让后续章失去前置章，会被 `downstream_chapters_exist` 阻断。
+
+系统先按章的状态分类：没有 accepted commit 的走草稿删除（正文、本章临时 artifacts、审查报告先归档到 `.webnovel/discarded/`，再删文件并清理章级 state，`大纲/第N章-*.md` 章纲保留）；已 accepted 的走版本点回退（`git switch -c rewrite-from-ch{NNNN} ch{NNNN}`），整棵树回到上一章完成时。回退**不删除任何提交**，原分支仍指向被抛弃的那次提交。
+
+```bash
+/webnovel-chapter-discard 12
+```
+
+底层 CLI 支持：
+
+```bash
+python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" \
+  --project-root "${PROJECT_ROOT}" chapter-discard --chapter 12 --dry-run --format json
+python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" \
+  --project-root "${PROJECT_ROOT}" chapter-discard --chapter 12 --draft --format json
+python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" \
+  --project-root "${PROJECT_ROOT}" chapter-discard --chapter 12 --rollback --format json
+```
+
+`chNNNN` 的语义是「第 N 章**完成后**」，所以抛弃第 N 章要回退 `ch{N-1}`，不是 `chN`。第 1 章没有 `ch0000`，回退目标是仓库初始提交（分支名 `rewrite-from-start`）。回退要求工作树干净，`working_tree_dirty` 会阻断。
+
 ### `/webnovel-write [章号]`（`context-agent` 先 research 并生成写作任务书 → 按任务书起草正文 → 审查 → 润色 → 数据落盘）。
 
 ```bash

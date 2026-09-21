@@ -1,7 +1,7 @@
 # Webnovel Writer
 
 [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-6.3.0-brightgreen.svg)](.claude-plugin/marketplace.json)
+[![Version](https://img.shields.io/badge/version-6.4.0-brightgreen.svg)](.claude-plugin/marketplace.json)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-Compatible-purple.svg)](https://claude.ai/claude-code)
 [![Marketplace](https://img.shields.io/badge/Claude%20Code-Marketplace-black.svg)](.claude-plugin/marketplace.json)
@@ -66,6 +66,7 @@ Webnovel Writer 用业余时间维护。如果它帮你省下了梳理设定、�
 | 章纲修改 | `/webnovel-chapter-revise` | 先分析并确认影响，再定向修改章纲、备份并刷新章级合同与 revision |
 | 章节创作 | `/webnovel-write` | 一条龙写完一章：备上下文、起草、审查、润色、记录事实、自动备份 |
 | 正文重载 | `/webnovel-chapter-reload` | 人工修改正文后按内容 revision 备份、重新校验 artifacts，并在确认后提交 |
+| 抛弃正文 | `/webnovel-chapter-discard` | 抛弃一章正文：未提交草稿归档后删除，已提交章回退到上一章版本点 |
 | 事实审查 | `/webnovel-review` | 章节事实一致性与逻辑审查：设定、时间线、叙事连贯、角色一致性与逻辑五维 |
 | 状态查询 | `/webnovel-query` | 查询角色、伏笔、节奏、实体关系和运行时信息 |
 | 项目学习 | `/webnovel-learn` | 把这本书里好用的写法记下来，存进项目长期记忆 |
@@ -79,7 +80,7 @@ Webnovel Writer 用业余时间维护。如果它帮你省下了梳理设定、�
 
 ```mermaid
 flowchart LR
-    User[作者 / Claude Code] --> Skills[16 个 Skill 命令]
+    User[作者 / Claude Code] --> Skills[17 个 Skill 命令]
     Skills --> Agents[Context / Reviewer / Data / Deconstruction Agent]
     Agents --> Story[.story-system 合同与提交链]
     Story --> Commit[accepted CHAPTER_COMMIT]
@@ -220,6 +221,16 @@ git switch -c rewrite-from-ch0030 ch0030    # 工作树整体回到第 30 章，
 
 两个注意点：动手前 `git status --short` 必须为空（有未提交改动 `git switch` 会拒绝执行）；回到旧章后重写同一章号时，`backup` 会把 `chNNNN` 前移到新提交，被前移的旧版本点自动保留为 `chNNNN-prev-<时间戳>`（例如 `ch0031-prev-20260917T105258`）——历史提交不丢，也不需要手工删 tag，要回到某个旧状态就 `git switch -c <分支> chNNNN-prev-<时间戳>`。`backup --list` 会把历史点列在当前版本点下方。
 
+刚写完的一章整章不要了，先用 `/webnovel-chapter-discard`：它会先预览这一章的状态与影响范围，未定稿的章归档后删除，已定稿的章自动回退到上一章版本点（只允许抛弃最后一章）。想手工做等价操作，就是同一条 git 命令，但**章号退一位**：`chNNNN` 指的是"第 N 章完成后"的状态，所以抛弃第 10 章要回到 `ch0009`——回到 `ch0010` 只会把这一章原样留着。
+
+```bash
+git switch -c rewrite-from-ch0009 ch0009    # 抛弃第 10 章：回到 ch0009
+git diff --stat HEAD ch0010                 # 看清这次到底丢掉了什么
+git show ch0010:"正文/第10章-*.md"           # 后悔了随时取回
+```
+
+第 10 章的正文、commit、索引行、state 与摘要一起消失，下一章直接从第 10 号重新写；被抛弃的提交和 `ch0010` tag 仍在仓库里。写这一章时顺手改过的章纲也会一起撤掉。完整清单见 `docs/operations/operations.md` 的「抛弃刚写完的一章」。
+
 Git 不可用时 `backup` 退化为本地 `snapshot_chNNNN_*` 副本（带文件大小与 SHA-256 manifest，只保留最近 10 份），那是离线副本，恢复需要手工复制文件。
 
 
@@ -263,6 +274,7 @@ Git 不可用时 `backup` 退化为本地 `snapshot_chNNNN_*` 副本（带文件
 | `/webnovel-chapter-plan` | `/webnovel-chapter-plan 1 1-10` | 生成第 1 卷第 1-10 章的独立章纲与章级合同 |
 | `/webnovel-chapter-revise` | `/webnovel-chapter-revise 15 把反派出场提前` | 确认式引导修改第 15 章章纲并刷新合同 |
 | `/webnovel-chapter-reload` | `/webnovel-chapter-reload 12` | 人工修改第 12 章后重载正文 revision、重新校验并确认提交 |
+| `/webnovel-chapter-discard` | `/webnovel-chapter-discard 12` | 抛弃第 12 章正文（草稿删除或版本点回退） |
 | `/webnovel-write` | `/webnovel-write 45` | 写作并提交指定章节 |
 | `/webnovel-review` | `/webnovel-review 1-5` | 审查章节范围 |
 | `/webnovel-query` | `/webnovel-query 萧炎` | 查询角色、伏笔、状态等信息 |
@@ -378,7 +390,8 @@ git push origin feature/your-feature
 
 | 版本 | 主要变化 |
 |------|----------|
-| **v6.3.0 (当前)** | 文风有档案，漏章藏不住，已定稿的事实也能改 |
+| **v6.4.0 (当前)** | 一章不要了，直接抛弃 |
+| **v6.3.0** | 文风有档案，漏章藏不住，已定稿的事实也能改 |
 | **v6.2.1** | 修复 Windows 写章提交偶发的拒绝访问（WinError 5）：资料文件被短暂占用时自动重试 |
 | **v6.2.0** | 写章结果更清楚，失败后更好恢复 |
 | **v6.1.0** | 插件运行时加固：新增 doctor/project-status/write-gate/projection 重放、hooks、行为 eval 与发布校验 |

@@ -352,6 +352,34 @@ def cmd_chapter_reload(args: argparse.Namespace) -> int:
     return 0 if report.get("ok") else 1
 
 
+def cmd_chapter_discard(args: argparse.Namespace) -> int:
+    from .chapter_discard import (
+        discard_chapter_draft,
+        format_chapter_discard_report,
+        plan_chapter_discard,
+        rollback_chapter,
+    )
+
+    root = _resolve_root(args.project_root)
+    if args.draft:
+        report = discard_chapter_draft(root, args.chapter, reason=args.reason)
+    elif args.rollback:
+        report = rollback_chapter(root, args.chapter, reason=args.reason)
+    else:
+        plan = plan_chapter_discard(root, args.chapter)
+        report = {
+            "schema_version": plan["schema_version"],
+            "action": "preview",
+            "chapter": args.chapter,
+            "dry_run": True,
+            "ok": not plan["blockers"],
+            "reason": args.reason,
+            "plan": plan,
+        }
+    print(format_chapter_discard_report(report, args.format))
+    return 0 if report.get("ok") else 1
+
+
 def cmd_volume_reload(args: argparse.Namespace) -> int:
     from .volume_planning import format_volume_reload_report, reload_volume_plan
 
@@ -565,6 +593,19 @@ def main() -> None:
     p_chapter_reload.add_argument("--expected-input", default="", help="作者确认的预览 input_token")
     p_chapter_reload.add_argument("--format", choices=["json", "text"], default="text")
     p_chapter_reload.set_defaults(func=cmd_chapter_reload)
+
+    p_chapter_discard = sub.add_parser(
+        "chapter-discard",
+        help="抛弃章节正文：未提交草稿直接删除，已提交章回退到上一章版本点",
+    )
+    p_chapter_discard.add_argument("--chapter", type=int, required=True, help="目标章节号")
+    discard_mode = p_chapter_discard.add_mutually_exclusive_group()
+    discard_mode.add_argument("--dry-run", action="store_true", help="只预览，不写入（默认）")
+    discard_mode.add_argument("--draft", action="store_true", help="执行：删除未提交草稿（先归档到 .webnovel/discarded/）")
+    discard_mode.add_argument("--rollback", action="store_true", help="执行：已提交章回退到上一章版本点（git switch -c）")
+    p_chapter_discard.add_argument("--reason", default="", help="抛弃理由，记入归档清单")
+    p_chapter_discard.add_argument("--format", choices=["json", "text"], default="text", help="输出格式")
+    p_chapter_discard.set_defaults(func=cmd_chapter_discard)
 
     p_volume_reload = sub.add_parser("volume-reload", help="重载卷纲 revision 并标记下游章纲过期")
     p_volume_reload.add_argument("--volume", type=int, required=True, help="目标卷号")

@@ -8,14 +8,14 @@
 
 | 类型 | 数量 | 位置 |
 |------|------|------|
-| Skills（斜杠命令） | 16 | `skills/<name>/SKILL.md` |
+| Skills（斜杠命令） | 17 | `skills/<name>/SKILL.md` |
 | Agents（子代理） | 4 | `agents/*.md` |
 | Python 工具 | 统一入口 | `scripts/webnovel.py` |
 | 题材/写法数据 | 9 CSV | `references/csv/*.csv` |
 | 题材模板 | 按题材 | `templates/genres/*.md` |
 | Dashboard 前端 | 预打包 | `dashboard/frontend/dist/`（随包发布，无需本地构建） |
 
-### 16 个 Skill
+### 17 个 Skill
 
 | 命令 | 用途 |
 |------|------|
@@ -27,6 +27,7 @@
 | `/webnovel-chapter-plan` | 基于已完成卷纲生成独立章纲，并刷新章级 Story System 合同 |
 | `/webnovel-chapter-revise` | 先确认影响范围，再引导式修改章纲并刷新章级合同与 revision |
 | `/webnovel-chapter-reload` | 人工修改正文后重载 revision，重新审查/提取并确认提交 |
+| `/webnovel-chapter-discard` | 抛弃章节正文：未提交草稿归档后删除，已提交章回退到上一章版本点 |
 | `/webnovel-write` | 一条龙写章：上下文 → 起草 → 审查 → 润色 → 提交 → 备份 |
 | `/webnovel-review` | 章节事实一致性与逻辑审查：setting / timeline / continuity / character / logic 五维 |
 | `/webnovel-query` | 查询设定、角色、伏笔、运行时信息（只读） |

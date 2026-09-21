@@ -37,11 +37,12 @@
 ┌─────────────────────────────────────────────────────────────┐
 │                      Claude Code                            │
 ├─────────────────────────────────────────────────────────────┤
-│  Skills (16个):                                             │
+│  Skills (17个):                                             │
 │    init / outline-revise / plan / volume-revise             │
 │    volume-reload / chapter-plan / chapter-revise            │
-│    chapter-reload / write / review / query                  │
-│    learn / style-learn / dashboard / doctor / audit         │
+│    chapter-reload / chapter-discard / write / review        │
+│    query / learn / style-learn / dashboard                  │
+│    doctor / audit                                           │
 ├─────────────────────────────────────────────────────────────┤
 │  Agents (4个):                                              │
 │    Context Agent / Data Agent / Reviewer                    │

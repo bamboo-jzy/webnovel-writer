@@ -2,6 +2,37 @@
 
 这里记录每个正式版本对作者和维护者的影响。发布说明优先面向中文网文作者：先说写作体验有什么变化，再补维护者关心的技术细节。
 
+## v6.6.0 - 卷纲、章纲先和你讨论再生成
+
+发版范围：`v6.5.0..v6.6.0`。
+
+### 给作者看的变化
+
+- **规划不再由 AI 一个人拍**：`/webnovel-plan` 生成卷纲前，先和你把 10 项卷级决策逐轮过一遍（核心冲突、卷末高潮与承接、中段反转、危机递增、时间体系、倒计时、伏笔埋收、新增设定边界等）；`/webnovel-chapter-plan` 同样先讨论，但**按批次走** —— 第一批问全 10 项章级议题，后续批次只问未决项与偏离项，不会每批重复问。
+- 每轮只问 3-5 个议题，先给建议、理由与风险，再给有限选项。**没有轮次上限**，但每轮都带「不再讨论，结束对话」；你选它就结束。也可以直接说"按你的建议来"，系统记为"作者明确接受默认"，照样通过。
+- 讨论结论落成**决策卡**（卷纲 `大纲/第N卷-规划讨论.md`、章纲 `大纲/第N卷-章纲规划讨论.md`），随时可查"这一卷/这一批定了什么、谁定的"，中断后可接着聊。
+- 闸门未过（决策卡为空 / 10 项有未决 / 存在 `BLOCKER` / 你尚未确认）时**不落任何卷级、章级产物**：不写节拍表、不写章纲、不刷合同、不动状态，只保留决策卡并说明卡点与恢复方式。
+- `/webnovel-volume-revise` 与 `/webnovel-chapter-revise` 的确认轮同样无次数上限、每轮带「不再讨论」，与生成侧口径一致。
+- **抛弃已定稿章不再新建分支**：改为原地回退 —— 工作树与索引恢复成"上一章完成时"，在**当前分支**追加一次「抛弃第 N 章」提交。不用再记自己在哪条线上；被抛弃的提交**一条都没删**（成为新提交的父提交），版本点 tag `chN` 也不移动，`git show chN:正文/第N章-*.md` 照样取回。
+- 顺带修掉老麻烦：**同一章反复抛弃不再被"同名分支已存在"卡住**。
+
+### 是否需要改旧项目
+
+不需要。两份讨论稿是新增的可选产物，旧项目不会凭空多出文件；决策卡放在 `大纲/` 下，因此会自动进入版本点备份。弃稿改的是执行方式，不涉及数据结构。
+
+注意一点：讨论稿里**不要写占位标记**（`[待...]`、`（暂名）`、`{占位}`），未决统一写 `待定` —— `大纲/` 下所有 Markdown 都会被写前门禁扫描，占位符会变成阻断正文写作的假 blocker。
+
+### 给维护者
+
+- 卷纲闸门：`skills/webnovel-plan/SKILL.md` 新增 `## 规划对话闸门（Step 1.5-1.6）`，执行流程插入 Step 1.5 / 1.6，**插值编号，Step 2-8 不重编号**（`reference-loading-map.md` 按 Step 4/5/6 登记 reference，重编号会连带改 map 与锚点）。卷级闸门 4 项：决策卡非空 / 10 项未决 = 0 / `BLOCKER` = 0 / 状态已确认。
+- 章纲闸门：`skills/webnovel-chapter-plan/SKILL.md` 同样插 Step 1.5/1.6，闸门 5 项（多一项「不含 canon 级新增定义」）。
+- 决策卡命名禁忌（已取证）：不得以 `第N章` 开头（`chapter_outline_loader.py` / `chapter_paths.py` 的 `第{num}章*.md` **含不补零模式** → 会污染 `contract_revision()`），不得以 `大纲.md` 结尾（`project_phase.py` 的 `第*卷*大纲.md`）。决策卡不进 `volume_planning_revision()` 也不进 `contract_revision()`，**不会误标章纲 stale**。
+- 新增 reference：`skills/webnovel-plan/references/outlining/volume-dialogue.md`、`skills/webnovel-chapter-plan/references/outlining/chapter-dialogue.md`（章级引用卷级话术，不复制）；两个 revise skill 复用对应话术。skill 数仍 17，覆盖度仍 17/17，未新增 CLI 子命令。
+- 弃稿：`scripts/data_modules/chapter_discard.py` 删 `ROLLBACK_BRANCH_PREFIX` / `INITIAL_ROLLBACK_BRANCH` → `ROLLBACK_MODE = "in_place"`；`_rollback_probe` 去分支字段，加 `mode` / `creates_branch=False` / `commit_message` / 新阻断 `version_point_not_ancestor`（`git merge-base --is-ancestor`，防两段历史拼接）。`rollback_chapter` 新链路：归档 → `git read-tree -u --reset <版本点>` → 有差异才 commit → 核对改为 `tree_matches_target` + `chapter_body_absent` + `current_chapter_after`。选 `read-tree` 而非 `git reset --hard`（被 `fast.json` 的 `forbidden_patterns` 禁止，且会移动分支指针）。
+- 测试与评测：`test_prompt_integrity.py` **+4**；`test_chapter_discard.py` **22 → 23**（`test_rollback_rejects_existing_rollback_branch` → `..._version_point_from_foreign_history`，新增「连续两次抛弃无需人工清理」）；`fast.json` 四个契约增补 required，`skill_chapter_discard_contract` 去 `rewrite-from-start`，`forbidden_patterns` 加 `git switch -c` 与 `rewrite-from`。
+- 沙箱行为修正：本机只吞 `git switch`，**`git read-tree -u` 落盘正常** → `_assert_worktree_restored` 判定改为比「新提交树 == 版本点 tag 树」，不再依赖 `git switch` 的特征。
+- 文档同步：两个 `README.md`、`docs/guides/commands.md`、`docs/architecture/overview.md`、`docs/operations/operations.md`（抛弃段手工等价命令改为 `read-tree` + `commit`）、`references/index/reference-loading-map.md`。顺手删掉 `overview.md` 末尾重复出现两次的「卷纲 revision 以节拍表…」段。通用「恢复到历史版本」一节的作者手工 `git switch -c` 配方**刻意保留**（那是手工恢复到任意旧版本的能力，非弃稿路径）。
+
 ## v6.5.0 - 最低 Python 版本提升到 3.12
 
 发版范围：`v6.4.0..v6.5.0`。

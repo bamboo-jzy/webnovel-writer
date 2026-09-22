@@ -22,9 +22,13 @@
       "id": "skill_plan_contract",
       "type": "skill_contract",
       "skill": "webnovel-plan",
-      "description": "/webnovel-plan preserves outline blockers while producing volume-only planning artifacts.",
+      "description": "/webnovel-plan runs the volume planning dialogue and decision-card gate before producing volume-only planning artifacts.",
       "required": [
         "若发现总纲与设定冲突，先阻断",
+        "先对话后生成",
+        "大纲/第{volume_id}卷-规划讨论.md",
+        "不再讨论",
+        "不落任何卷级产物",
         "placeholder-scan",
         "story-system"
       ]
@@ -33,8 +37,12 @@
       "id": "skill_chapter_plan_contract",
       "type": "skill_contract",
       "skill": "webnovel-chapter-plan",
-      "description": "/webnovel-chapter-plan creates independent chapter outlines before refreshing chapter contracts.",
+      "description": "/webnovel-chapter-plan runs the per-batch chapter planning dialogue and decision-card gate before creating independent chapter outlines and refreshing chapter contracts.",
       "required": [
+        "先对话后生成",
+        "大纲/第{volume_id}卷-章纲规划讨论.md",
+        "不再讨论",
+        "不落任何章级产物",
         "大纲/第N章-标题.md",
         "CBN",
         "CPNs",
@@ -48,10 +56,11 @@
       "id": "skill_volume_revise_contract",
       "type": "skill_contract",
       "skill": "webnovel-volume-revise",
-      "description": "/webnovel-volume-revise confirms impact before editing and reloads the volume revision afterward.",
+      "description": "/webnovel-volume-revise confirms impact before editing, shares the planning-dialogue option wording, and reloads the volume revision afterward.",
       "required": [
         "修改前先备份",
         "作者确认",
+        "不再讨论",
         "volume-reload",
         "不得自动覆盖独立章纲",
         "stale"
@@ -90,7 +99,7 @@
       "id": "skill_chapter_discard_contract",
       "type": "skill_contract",
       "skill": "webnovel-chapter-discard",
-      "description": "Discarding a chapter is tail-only: drafts are archived then deleted, accepted chapters roll back to the previous version point without rewriting history.",
+      "description": "Discarding a chapter is tail-only: drafts are archived then deleted; accepted chapters restore the previous version point in place on the current branch, without creating a new branch or rewriting history.",
       "required": [
         "chapter-discard",
         "--dry-run",
@@ -98,7 +107,9 @@
         "--rollback",
         "只允许抛弃最后一章",
         "ch{N-1}",
-        "rewrite-from-start",
+        "原地",
+        "不新建分支",
+        "read-tree",
         ".webnovel/discarded/",
         "不删除任何提交",
         "downstream_chapters_exist",
@@ -108,7 +119,9 @@
       "forbidden_patterns": [
         "git reset --hard",
         "git checkout ch",
-        "rm -rf"
+        "rm -rf",
+        "git switch -c",
+        "rewrite-from"
       ]
     },
     {

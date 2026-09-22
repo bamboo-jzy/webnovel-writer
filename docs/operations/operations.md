@@ -343,7 +343,7 @@ git switch -c rewrite-from-ch0030 ch0030    # 工作树整体回到 ch0030 状�
 | 章的状态 | 路径 | 结果 |
 |---|---|---|
 | 尚未 accepted（只有正文、草稿项或 rejected commit） | `--draft` | 正文、本章 artifacts、审查报告先整批归档到 `.webnovel/discarded/chapter_NNN_<时间戳>/`（保持项目内相对路径，可原样复制回去），再删除；`state.json` 的章级条目清理并重算 `current_chapter` / `total_words`；`大纲/` 不动 |
-| 已 accepted | `--rollback` | 版本点回退：整棵树回到第 N-1 章完成时；不删除任何提交 |
+| 已 accepted | `--rollback` | 原地版本点回退：正文与本章 commit 先归档，再把工作树与索引恢复成第 N-1 章完成时的内容，并在**当前分支**追加一次抛弃提交；不新建分支、不删除任何提交 |
 
 ```bash
 python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" --project-root "${PROJECT_ROOT}" \
@@ -354,18 +354,22 @@ python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" --project-root "${PRO
   chapter-discard --chapter 10 --rollback --reason "整章作废" --format json
 ```
 
-回退这一路的手工等价命令如下，**章号要往前退一位**：
+回退这一路的手工等价命令如下，**章号要往前退一位**，且**不新建分支**：
 
 ```bash
 cd "${PROJECT_ROOT}"
 git status --short                        # 必须为空
 git log --oneline -3                      # 确认最新提交是 "Chapter N"
-git switch -c rewrite-from-ch0009 ch0009  # 抛弃第 10 章：回到 ch0009，不是 ch0010
+git show ch0010:"正文/第10章-*.md" > /tmp/ch10.bak.md   # 想留一份就先导出
+git read-tree -u --reset ch0009           # 抛弃第 10 章：回到 ch0009，不是 ch0010
+git commit -m "Discard chapter 10: restore to ch0009"   # 在当前分支追加一次提交
 ```
+
+`git read-tree -u --reset` 只改工作树与索引（未跟踪文件保留），不移动分支指针、不新建分支、不删除提交：被抛弃的提交会成为新提交的父提交，`ch0010` tag 也仍指向它。插件走的是同一条路，只是把归档、提交和核对都代劳了。
 
 `chNNNN` 的语义是"第 N 章**完成后**已备份的状态"（`backup --chapter N` 在 `/webnovel-write` Step 6 执行），所以抛弃第 N 章要回到 `ch{N-1}`。回到 `chNNNN` 只会把这一章原样留着——这是最容易踩的一步。
 
-`git switch` 之后工作树逐项回到第 N-1 章完成时：
+原地回退之后工作树逐项回到第 N-1 章完成时：
 
 | 内容 | 结果 |
 |---|---|
@@ -374,7 +378,8 @@ git switch -c rewrite-from-ch0009 ch0009  # 抛弃第 10 章：回到 ch0009，�
 | `.webnovel/state.json`（含 `chapter_revisions`） | 回到第 N-1 章 |
 | `.webnovel/index.db`（chapters / scenes / appearances / state_changes / relationships） | 回到第 N-1 章 |
 | `.webnovel/summaries/`、`projection_log.jsonl` | 回到第 N-1 章 |
-| 被抛弃的提交、`chNNNN` tag、原分支 | **全部保留**，随时可取回 |
+| 被抛弃的提交、`chNNNN` tag、当前分支 | **全部保留**：提交仍是新提交的父提交，分支名不变 |
+| `.webnovel/discarded/chapter_NNN_<时间戳>/` | 新增归档副本（未跟踪，不随回退消失） |
 
 `大纲/`、`设定集/` 也在版本点内：如果写这一章时顺手改过章纲，那些改动同样会被撤掉。想看这次回退究竟丢掉了什么：
 
@@ -389,7 +394,7 @@ git show ch0010:"正文/第10章-*.md"        # 取回被抛弃的正文
 
 两个边界：
 
-- **第 1 章**没有 `ch0000`。`chapter-discard --rollback` 会自动改为回退到仓库初始提交（`git rev-list --max-parents=0 HEAD`，分支名 `rewrite-from-start`）；手工做时用 `git log --oneline` 找到 `Chapter 1` 那个提交之前的提交，再 `git switch -c rewrite-from-start <sha>`。初始提交不唯一时会阻断，转人工。
+- **第 1 章**没有 `ch0000`。`chapter-discard --rollback` 会自动改为回退到仓库初始提交（`git rev-list --max-parents=0 HEAD`）；手工做时用 `git log --oneline` 找到第一个提交，再 `git read-tree -u --reset <sha> && git commit -m "Discard chapter 1: restore to <sha 短号>"`。初始提交不唯一时会阻断，转人工。
 - **这一章还没有版本点**（写章中途失败、没跑到 Step 6，只留下 commit 和索引行）。先补一个：`backup --chapter N`，再把上面流程走一遍。不要手工删文件了事——`projections retry --chapter N --retract` 靠 commit json 定位章号，commit json 一删，`index.db` / `vectors.db` / `story_events` 里那一章的派生行就再没有干净的清理入口。
 
 无 Git 环境下列出的 `snapshot_chNNNN_*` 是离线副本（带 `snapshot/v1` manifest 与 SHA-256，只保留最近 10 份），没有配套恢复命令，需要手工复制文件；这个模式下恢复能力由作者自行保证。

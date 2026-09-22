@@ -21,13 +21,13 @@
 |------|------|
 | `/webnovel-init` | 深度初始化项目骨架、设定集、总纲 |
 | `/webnovel-outline-revise` | 以已发布章节为冻结线，确认式修改总纲；推翻型诉求只阻断提示 |
-| `/webnovel-plan` | 只生成卷级节拍表、时间线和纯卷纲，并写回新增设定 |
-| `/webnovel-volume-revise` | 先确认影响范围，再引导式修改卷纲并刷新 revision |
+| `/webnovel-plan` | 生成前先与作者逐轮讨论卷级决策（每轮可随时选「不再讨论」），通过决策卡闸门后只生成卷级节拍表、时间线和纯卷纲，并写回新增设定 |
+| `/webnovel-volume-revise` | 先确认影响范围，再引导式修改卷纲并刷新 revision；确认轮可随时选择不再讨论 |
 | `/webnovel-volume-reload` | 人工编辑卷纲后重算 revision，标记下游章纲 stale |
-| `/webnovel-chapter-plan` | 基于已完成卷纲生成独立章纲，并刷新章级 Story System 合同 |
+| `/webnovel-chapter-plan` | 按批次先讨论章级决策并过决策卡闸门，再生成独立章纲并刷新章级 Story System 合同 |
 | `/webnovel-chapter-revise` | 先确认影响范围，再引导式修改章纲并刷新章级合同与 revision |
 | `/webnovel-chapter-reload` | 人工修改正文后重载 revision，重新审查/提取并确认提交 |
-| `/webnovel-chapter-discard` | 抛弃章节正文：未提交草稿归档后删除，已提交章回退到上一章版本点 |
+| `/webnovel-chapter-discard` | 抛弃章节正文：未提交草稿归档后删除，已提交章原地回退到上一章版本点（不新建分支） |
 | `/webnovel-write` | 一条龙写章：上下文 → 起草 → 审查 → 润色 → 提交 → 备份 |
 | `/webnovel-review` | 章节事实一致性与逻辑审查：setting / timeline / continuity / character / logic 五维 |
 | `/webnovel-query` | 查询设定、角色、伏笔、运行时信息（只读） |

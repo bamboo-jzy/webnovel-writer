@@ -32,7 +32,9 @@ Skill 先计算冻结线、读取冻结线内各章已发布事实，把诉求�
 
 ### `/webnovel-plan [卷号]`
 
-只生成卷级规划：卷节拍表、卷时间线和纯卷级详细大纲，并增量写回设定与总纲。它不会生成逐章章纲或章级 Story System 合同。
+先与你逐轮讨论卷级决策（核心冲突、卷末高潮与承接、中段反转、递增危机、时间体系与倒计时、Strand 与爽点密度、伏笔与开放环、新增设定边界与本卷禁区），把结论落成决策卡 `大纲/第N卷-规划讨论.md`；通过决策卡闸门后才生成卷级规划：卷节拍表、卷时间线和纯卷级详细大纲，并增量写回设定与总纲。
+
+对话没有轮次上限，每轮都带「不再讨论」选项，选择即结束讨论；未决项不为 0 时不落任何卷级产物。它不会生成逐章章纲或章级 Story System 合同。
 
 ```bash
 /webnovel-plan 1
@@ -41,7 +43,9 @@ Skill 先计算冻结线、读取冻结线内各章已发布事实，把诉求�
 
 ### `/webnovel-chapter-plan [卷号] [章节范围]`
 
-读取已完成的卷级规划，按 8-12 章批次生成独立章纲，校验 CBN → CPNs → CEN、相邻章承接、时间锚点与伏笔推进，并刷新每章的 Story System 合同。
+按批次先与你逐轮讨论章级决策（批次切分、卷级节拍节点到章号的映射、关键章目标、阻力与代价的递增顺序、CEN → CBN 承接链、时间锚点与倒计时节奏、伏笔埋收、爽点与 Strand 分布、本批禁区），把结论落成决策卡 `大纲/第N卷-章纲规划讨论.md`；通过决策卡闸门后才按 8-12 章批次生成独立章纲，校验 CBN → CPNs → CEN、相邻章承接、时间锚点与伏笔推进，并刷新每章的 Story System 合同。
+
+对话没有轮次上限，每轮都带「不再讨论」选项，选择即结束讨论；首批问全 10 项必答议题，后续批次只问未决项与偏离项。未决项不为 0 时不落任何章级产物（不写章纲、不刷合同、不登记状态）。
 
 ```bash
 /webnovel-chapter-plan 1
@@ -53,7 +57,7 @@ Skill 先计算冻结线、读取冻结线内各章已发布事实，把诉求�
 
 ### `/webnovel-chapter-revise [章号] [修改诉求]`
 
-以确认式流程修改已有章纲。Skill 会先读取目标章纲、所属卷三份卷级文件、总纲、相邻章纲和状态证据，展示保留项、修改项及对相邻章承接、时间线、伏笔的影响；只有作者确认后才备份并定向编辑。修改后重新校验章纲、刷新章级 Story System 合同，并用 `update-state --chapter-planned` 自动重算章纲 revision 与合同 revision 重登记。
+以确认式流程修改已有章纲。Skill 会先读取目标章纲、所属卷三份卷级文件、总纲、相邻章纲和状态证据，展示保留项、修改项及对相邻章承接、时间线、伏笔的影响；确认轮没有上限，每轮带「不再讨论」选项，只有作者确认后才备份并定向编辑。修改后重新校验章纲、刷新章级 Story System 合同，并用 `update-state --chapter-planned` 自动重算章纲 revision 与合同 revision 重登记。
 
 ```bash
 /webnovel-chapter-revise 15
@@ -64,7 +68,7 @@ Skill 先计算冻结线、读取冻结线内各章已发布事实，把诉求�
 
 ### `/webnovel-volume-revise [卷号] [修改诉求]`
 
-以确认式流程修改已有卷纲。Skill 会先读取三份卷级文件、总纲、设定和状态，展示保留项、修改项及影响章节；只有作者确认后才定向编辑。修改前会备份卷纲和状态，修改后校验并刷新 revision，不会自动覆盖独立章纲或章级合同。
+以确认式流程修改已有卷纲。Skill 会先读取三份卷级文件、总纲、设定和状态，展示保留项、修改项及影响章节；只有作者确认后才定向编辑。确认轮没有上限，每轮都带「不再讨论，按当前已确认范围结束」选项，选择即结束确认；仍待定的项保持原样。修改前会备份卷纲和状态，修改后校验并刷新 revision，不会自动覆盖独立章纲或章级合同。
 
 ```bash
 /webnovel-volume-revise 1
@@ -124,7 +128,7 @@ python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" --project-root "${PRO
 
 抛弃一章正文。只允许处理**最后一章**；中间章会让后续章失去前置章，会被 `downstream_chapters_exist` 阻断。
 
-系统先按章的状态分类：没有 accepted commit 的走草稿删除（正文、本章临时 artifacts、审查报告先归档到 `.webnovel/discarded/`，再删文件并清理章级 state，`大纲/第N章-*.md` 章纲保留）；已 accepted 的走版本点回退（`git switch -c rewrite-from-ch{NNNN} ch{NNNN}`），整棵树回到上一章完成时。回退**不删除任何提交**，原分支仍指向被抛弃的那次提交。
+系统先按章的状态分类：没有 accepted commit 的走草稿删除（正文、本章临时 artifacts、审查报告先归档到 `.webnovel/discarded/`，再删文件并清理章级 state，`大纲/第N章-*.md` 章纲保留）；已 accepted 的走**原地版本点回退**：正文与本章 commit 先归档，再把工作树与索引恢复成第 N-1 章完成时的内容，最后在当前分支追加一次提交。**两条路都不新建分支**，回退也不删除任何提交、不移动版本点 tag——被抛弃的提交会成为新提交的父提交，仍留在分支历史里。
 
 ```bash
 /webnovel-chapter-discard 12
@@ -141,7 +145,7 @@ python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" \
   --project-root "${PROJECT_ROOT}" chapter-discard --chapter 12 --rollback --format json
 ```
 
-`chNNNN` 的语义是「第 N 章**完成后**」，所以抛弃第 N 章要回退 `ch{N-1}`，不是 `chN`。第 1 章没有 `ch0000`，回退目标是仓库初始提交（分支名 `rewrite-from-start`）。回退要求工作树干净，`working_tree_dirty` 会阻断。
+`chNNNN` 的语义是「第 N 章**完成后**」，所以抛弃第 N 章要回退 `ch{N-1}`，不是 `chN`。第 1 章没有 `ch0000`，回退目标是仓库初始提交。回退要求工作树干净，`working_tree_dirty` 会阻断；回退后 `tree_matches_target`、`chapter_body_absent`、`current_chapter_after` 三项核对不过会返回 `ok=false`。
 
 ### `/webnovel-write [章号]`（`context-agent` 先 research 并生成写作任务书 → 按任务书起草正文 → 审查 → 润色 → 数据落盘）。
 

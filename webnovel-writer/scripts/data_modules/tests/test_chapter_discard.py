@@ -310,10 +310,14 @@ def test_format_report_text_includes_blockers_and_warnings():
 
 
 # ---------------------------------------------------------------------------
-# 版本点回退
+# 已提交章：原地回退（不新建分支）
 # ---------------------------------------------------------------------------
 
-def test_rollback_preview_targets_previous_version_point(tmp_path):
+def _branches(root: Path) -> list[str]:
+    return sorted(_git(root, "branch", "--format=%(refname:short)").stdout.split())
+
+
+def test_rollback_preview_targets_previous_version_point_in_place(tmp_path):
     root = _git_project(tmp_path)
     plan = plan_chapter_discard(root, 2)
     assert plan["classification"] == "accepted"
@@ -321,7 +325,11 @@ def test_rollback_preview_targets_previous_version_point(tmp_path):
     assert rollback["allowed"], rollback["blockers"]
     assert rollback["target_tag"] == "ch0001"
     assert rollback["version_point_exists"] is True
-    assert rollback["command"] == "git switch -c rewrite-from-ch0001 ch0001"
+    assert rollback["command"] == "git read-tree -u --reset ch0001"
+    assert rollback["commit_message"] == "Discard chapter 2: restore to ch0001"
+    assert rollback["mode"] == "in_place"
+    assert rollback["creates_branch"] is False
+    assert "branch_name" not in rollback
     assert rollback["recovery_hint"]
 
 
@@ -333,29 +341,40 @@ def _assert_worktree_restored(root: Path, rel: str, tag: str) -> None:
     """回退后工作树应恢复 `rel`；工作树被环境吞写时退到 git 侧等价证据。
 
     本机沙箱把 TMP 钉在仓库内 `.tmp/pytest/`（`scripts/conftest.py:21`），该路径下
-    `git switch` 的落盘会被静默吞掉：目标文件缺失、`git status` 记为 ` D`，而索引与 HEAD
-    都正确指向版本点（`rollback_chapter` 自身只跑 `git switch`/`rev-parse`，从不改工作树）。
-    此类证据下跳过，避免把环境缺陷误判成产品缺陷；树恢复已在工作区外烟测验证。
+    git 写工作树可能被静默吞掉：目标文件缺失、`git status` 记为 ` D`，而索引与新提交的
+    树都正确等于版本点。此类证据下跳过，避免把环境缺陷误判成产品缺陷；树恢复已在
+    工作区外烟测验证（`.workbuddy/tmp/discard_smoke.py`）。
     """
     if (root / rel).exists():
         return
     tracked = _git(root, "-c", "core.quotepath=false", "ls-files").stdout
-    head = _git(root, "rev-parse", "HEAD").stdout.strip()
-    point = _git(root, "rev-parse", tag).stdout.strip()
-    if head == point and rel in tracked and f" D {rel}" in _status_porcelain(root):
-        pytest.skip(f"本机沙箱吞掉 git switch 落盘（{rel} 缺失但索引/HEAD=={tag}）；树恢复见工作区外烟测")
+    head_tree = _git(root, "rev-parse", "HEAD^{tree}").stdout.strip()
+    point_tree = _git(root, "rev-parse", f"{tag}^{{tree}}").stdout.strip()
+    if head_tree == point_tree and rel in tracked and f" D {rel}" in _status_porcelain(root):
+        pytest.skip(f"本机沙箱吞掉 git 写工作树（{rel} 缺失但新提交树=={tag}）；树恢复见工作区外烟测")
     assert (root / rel).exists(), f"回退后 {rel} 未恢复：\n{_status_porcelain(root)}"
 
 
-def test_rollback_restores_tree_and_keeps_discarded_commit_recoverable(tmp_path):
+def test_rollback_restores_tree_in_place_and_keeps_commit_recoverable(tmp_path):
+    """原地回退：分支不变、不新建分支，被抛弃的提交成为新提交的父提交。"""
     root = _git_project(tmp_path)
     old_branch = _git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    discarded_commit = _git(root, "rev-parse", "HEAD").stdout.strip()
+    branches_before = _branches(root)
+
     report = rollback_chapter(root, 2, reason="整章作废")
     assert report["ok"], report
-    assert report["branch"] == "rewrite-from-ch0001"
-    assert report["head_matches_target"] is True
+    assert report["mode"] == "in_place"
+    assert report["target_ref"] == "ch0001"
+    assert report["tree_matches_target"] is True
     assert report["chapter_body_absent"] is True
     assert report["current_chapter_after"] == 1
+    assert Path(report["archive_dir"]).is_dir()
+    assert any(name.endswith("第0002章-转折.md") for name in report["archived"])
+
+    # 不新建分支：分支列表不变，HEAD 仍在原分支上
+    assert _branches(root) == branches_before, _git(root, "branch", "-a").stdout
+    assert _git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() == old_branch
 
     assert not (root / "正文/第0002章-转折.md").exists()
     assert not (root / ".story-system/commits/chapter_002.commit.json").exists()
@@ -364,24 +383,54 @@ def test_rollback_restores_tree_and_keeps_discarded_commit_recoverable(tmp_path)
     assert state["progress"]["current_chapter"] == 1
     assert state["progress"]["chapter_status"] == {"1": "chapter_committed"}
 
-    # 回退不删除提交：原分支仍可取回被抛弃的正文
-    show = _git(root, "show", f"{old_branch}:正文/第0002章-转折.md", check=False)
+    # 不删除提交、不移动版本点：父提交与 tag ch0002 都还指向被抛弃的那次提交
+    assert _git(root, "rev-parse", "HEAD^").stdout.strip() == discarded_commit
+    assert _git(root, "rev-parse", "ch0002").stdout.strip() == discarded_commit
+    show = _git(root, "show", "ch0002:正文/第0002章-转折.md", check=False)
     assert show.returncode == 0
+
+
+def test_rollback_twice_in_a_row_needs_no_manual_cleanup(tmp_path):
+    """旧实现第二次抛弃会被同名分支挡下；原地回退没有这个副作用。"""
+    root = _git_project(tmp_path)
+    assert rollback_chapter(root, 2)["ok"]
+    branches_after_first = _branches(root)
+
+    # 重写第 2 章并重新备份（同章重写路径：tag 由 backup 前移）
+    (root / "正文/第0002章-转折.md").write_text("# 第2章 转折（重写）\n" + "字" * 200, encoding="utf-8")
+    _write_json(
+        root / ".story-system/commits/chapter_002.commit.json",
+        {"meta": {"chapter": 2, "status": "accepted", "content_revision": "r2b"}},
+    )
+    _write_state(root, V2_PROGRESS, chapter_meta={"2": {"dominant_strand": "quest"}})
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "Chapter 2: 重写")
+    _git(root, "tag", "-f", "ch0002")
+
+    report = rollback_chapter(root, 2)
+    assert report["ok"], report.get("blockers") or report.get("error")
+    assert not (root / "正文/第0002章-转折.md").exists()
+    assert _branches(root) == branches_after_first, _git(root, "branch", "-a").stdout
 
 
 def test_rollback_first_chapter_targets_initial_commit(tmp_path):
     root = _git_project(tmp_path, with_chapter_two=False)
+    branches_before = _branches(root)
     plan = plan_chapter_discard(root, 1)
     rollback = plan["rollback"]
     assert rollback["allowed"], rollback["blockers"]
     assert rollback["target_kind"] == "initial_commit"
-    assert rollback["branch_name"] == "rewrite-from-start"
+    assert rollback["target_commit"] == _git(root, "rev-list", "--max-parents=0", "HEAD").stdout.strip()
+    assert rollback["creates_branch"] is False
+    assert rollback["commit_message"] == f"Discard chapter 1: restore to {rollback['target_commit'][:8]}"
 
     report = rollback_chapter(root, 1)
     assert report["ok"], report
     assert not (root / "正文/第0001章-开端.md").exists()
+    assert _branches(root) == branches_before
     state = json.loads((root / ".webnovel/state.json").read_text(encoding="utf-8"))
     assert state["progress"]["current_chapter"] == 0
+    assert _git(root, "show", "ch0001:正文/第0001章-开端.md", check=False).returncode == 0
 
 
 def test_rollback_rejects_dirty_working_tree(tmp_path):
@@ -401,11 +450,21 @@ def test_rollback_rejects_missing_version_point(tmp_path):
     assert rollback_chapter(root, 2)["ok"] is False
 
 
-def test_rollback_rejects_existing_rollback_branch(tmp_path):
+def test_rollback_rejects_version_point_from_foreign_history(tmp_path):
+    """版本点不在当前分支历史上 → 阻断（原地恢复会把两段历史混在一起）。"""
     root = _git_project(tmp_path)
-    _git(root, "branch", "rewrite-from-ch0001", "ch0001")
+    _git(root, "tag", "-d", "ch0001")
+    _git(root, "checkout", "-q", "-b", "foreign", "HEAD~1")
+    (root / "正文/第0001章-开端.md").write_text("# 另一条线的第1章\n字", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "Foreign chapter 1")
+    _git(root, "tag", "ch0001")
+    _git(root, "checkout", "-q", "-")
+
     plan = plan_chapter_discard(root, 2)
-    assert "rollback_branch_exists" in [item["code"] for item in plan["rollback"]["blockers"]]
+    assert "version_point_not_ancestor" in [item["code"] for item in plan["rollback"]["blockers"]]
+    assert rollback_chapter(root, 2)["ok"] is False
+    assert (root / "正文/第0002章-转折.md").exists()
 
 
 def test_rollback_rejects_draft_chapter(tmp_path):

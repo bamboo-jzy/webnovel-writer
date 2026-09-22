@@ -1,7 +1,7 @@
 # Webnovel Writer
 
 [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-6.5.0-brightgreen.svg)](.claude-plugin/marketplace.json)
+[![Version](https://img.shields.io/badge/version-6.6.0-brightgreen.svg)](.claude-plugin/marketplace.json)
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-Compatible-purple.svg)](https://claude.ai/claude-code)
 [![Marketplace](https://img.shields.io/badge/Claude%20Code-Marketplace-black.svg)](.claude-plugin/marketplace.json)
@@ -59,14 +59,14 @@ Webnovel Writer 用业余时间维护。如果它帮你省下了梳理设定、�
 |------|------|------|
 | 深度初始化 | `/webnovel-init` | 分阶段问答，帮你把书的骨架、设定集、总纲和初始状态搭起来 |
 | 总纲修改 | `/webnovel-outline-revise` | 以已发布章节为冻结线，确认式修改总纲；推翻已发布事实的诉求只阻断提示 |
-| 卷纲规划 | `/webnovel-plan` | 基于总纲生成卷级节拍表、时间线和纯卷纲，并写回新增设定 |
-| 卷纲修改 | `/webnovel-volume-revise` | 先分析并确认影响，再定向修改卷纲、备份并刷新 revision |
+| 卷纲规划 | `/webnovel-plan` | 先与你逐轮讨论卷级决策并落盘决策卡，通过闸门后再生成卷级节拍表、时间线和纯卷纲，并写回新增设定 |
+| 卷纲修改 | `/webnovel-volume-revise` | 先分析并确认影响，再定向修改卷纲、备份并刷新 revision；确认轮可随时选择不再讨论 |
 | 卷纲重载 | `/webnovel-volume-reload` | 人工编辑卷纲后重算 revision，并标记依赖章节为 stale |
-| 章纲规划 | `/webnovel-chapter-plan` | 基于卷纲按批次生成独立章纲，校验承接并刷新章级 Story System 合同 |
+| 章纲规划 | `/webnovel-chapter-plan` | 按批次先讨论章级决策，再生成独立章纲，校验承接并刷新章级 Story System 合同 |
 | 章纲修改 | `/webnovel-chapter-revise` | 先分析并确认影响，再定向修改章纲、备份并刷新章级合同与 revision |
 | 章节创作 | `/webnovel-write` | 一条龙写完一章：备上下文、起草、审查、润色、记录事实、自动备份 |
 | 正文重载 | `/webnovel-chapter-reload` | 人工修改正文后按内容 revision 备份、重新校验 artifacts，并在确认后提交 |
-| 抛弃正文 | `/webnovel-chapter-discard` | 抛弃一章正文：未提交草稿归档后删除，已提交章回退到上一章版本点 |
+| 抛弃正文 | `/webnovel-chapter-discard` | 抛弃一章正文：未提交草稿归档后删除，已提交章原地回退到上一章版本点（不新建分支） |
 | 事实审查 | `/webnovel-review` | 章节事实一致性与逻辑审查：设定、时间线、叙事连贯、角色一致性与逻辑五维 |
 | 状态查询 | `/webnovel-query` | 查询角色、伏笔、节奏、实体关系和运行时信息 |
 | 项目学习 | `/webnovel-learn` | 把这本书里好用的写法记下来，存进项目长期记忆 |
@@ -170,8 +170,8 @@ RERANK_API_KEY=your_rerank_api_key
 ### 5. 开始规划和写作
 
 ```bash
-/webnovel-plan 1            # 规划第 1 卷卷纲
-/webnovel-chapter-plan 1 1-10  # 生成第 1 卷第 1-10 章的独立章纲与合同
+/webnovel-plan 1            # 先讨论第 1 卷的卷级决策（可随时选「不再讨论」），再生成卷纲
+/webnovel-chapter-plan 1 1-10  # 先讨论第 1 卷第 1-10 章的章级决策（可随时选「不再讨论」），再生成独立章纲与合同
 /webnovel-write 1             # 写第 1 章
 /webnovel-review 1-5  # 审查第 1-5 章
 /webnovel-query 伏笔  # 查询项目状态
@@ -221,15 +221,16 @@ git switch -c rewrite-from-ch0030 ch0030    # 工作树整体回到第 30 章，
 
 两个注意点：动手前 `git status --short` 必须为空（有未提交改动 `git switch` 会拒绝执行）；回到旧章后重写同一章号时，`backup` 会把 `chNNNN` 前移到新提交，被前移的旧版本点自动保留为 `chNNNN-prev-<时间戳>`（例如 `ch0031-prev-20260917T105258`）——历史提交不丢，也不需要手工删 tag，要回到某个旧状态就 `git switch -c <分支> chNNNN-prev-<时间戳>`。`backup --list` 会把历史点列在当前版本点下方。
 
-刚写完的一章整章不要了，先用 `/webnovel-chapter-discard`：它会先预览这一章的状态与影响范围，未定稿的章归档后删除，已定稿的章自动回退到上一章版本点（只允许抛弃最后一章）。想手工做等价操作，就是同一条 git 命令，但**章号退一位**：`chNNNN` 指的是"第 N 章完成后"的状态，所以抛弃第 10 章要回到 `ch0009`——回到 `ch0010` 只会把这一章原样留着。
+刚写完的一章整章不要了，先用 `/webnovel-chapter-discard`：它会先预览这一章的状态与影响范围，未定稿的章归档后删除，已定稿的章**原地回退**到上一章版本点（只允许抛弃最后一章）。回退不新建分支、不删除提交：把工作树恢复成上一章的内容后，在当前分支追加一次抛弃提交。想手工做等价操作，就是同一条 git 命令，但**章号退一位**：`chNNNN` 指的是"第 N 章完成后"的状态，所以抛弃第 10 章要回到 `ch0009`——回到 `ch0010` 只会把这一章原样留着。
 
 ```bash
-git switch -c rewrite-from-ch0009 ch0009    # 抛弃第 10 章：回到 ch0009
-git diff --stat HEAD ch0010                 # 看清这次到底丢掉了什么
-git show ch0010:"正文/第10章-*.md"           # 后悔了随时取回
+git read-tree -u --reset ch0009              # 抛弃第 10 章：工作树原地回到 ch0009
+git commit -m "Discard chapter 10: restore to ch0009"
+git diff --stat HEAD^ ch0010                 # 看清这次到底丢掉了什么
+git show ch0010:"正文/第10章-*.md"            # 后悔了随时取回
 ```
 
-第 10 章的正文、commit、索引行、state 与摘要一起消失，下一章直接从第 10 号重新写；被抛弃的提交和 `ch0010` tag 仍在仓库里。写这一章时顺手改过的章纲也会一起撤掉。完整清单见 `docs/operations/operations.md` 的「抛弃刚写完的一章」。
+第 10 章的正文、commit、索引行、state 与摘要一起消失，下一章直接从第 10 号重新写；分支名不变，被抛弃的提交和 `ch0010` tag 仍在仓库里（另有一份归档副本在 `.webnovel/discarded/`）。写这一章时顺手改过的章纲也会一起撤掉。完整清单见 `docs/operations/operations.md` 的「抛弃刚写完的一章」。
 
 Git 不可用时 `backup` 退化为本地 `snapshot_chNNNN_*` 副本（带文件大小与 SHA-256 manifest，只保留最近 10 份），那是离线副本，恢复需要手工复制文件。
 
@@ -268,13 +269,13 @@ Git 不可用时 `backup` 退化为本地 `snapshot_chNNNN_*` 副本（带文件
 |------|------|------|
 | `/webnovel-init` | `/webnovel-init` | 初始化新书项目 |
 | `/webnovel-outline-revise` | `/webnovel-outline-revise 把结局改为大团圆` | 以冻结线为界确认式修改总纲 |
-| `/webnovel-plan` | `/webnovel-plan 1` | 生成第 1 卷的卷级节拍表、时间线和纯卷纲 |
+| `/webnovel-plan` | `/webnovel-plan 1` | 先讨论卷级决策并过决策卡闸门，再生成第 1 卷的卷级节拍表、时间线和纯卷纲 |
 | `/webnovel-volume-revise` | `/webnovel-volume-revise 1` | 确认式引导修改第 1 卷卷纲 |
 | `/webnovel-volume-reload` | `/webnovel-volume-reload 1` | 人工编辑后重载卷纲 revision 并标记 stale |
-| `/webnovel-chapter-plan` | `/webnovel-chapter-plan 1 1-10` | 生成第 1 卷第 1-10 章的独立章纲与章级合同 |
+| `/webnovel-chapter-plan` | `/webnovel-chapter-plan 1 1-10` | 先讨论第 1 卷第 1-10 章的章级决策并过闸门，再生成独立章纲与章级合同 |
 | `/webnovel-chapter-revise` | `/webnovel-chapter-revise 15 把反派出场提前` | 确认式引导修改第 15 章章纲并刷新合同 |
 | `/webnovel-chapter-reload` | `/webnovel-chapter-reload 12` | 人工修改第 12 章后重载正文 revision、重新校验并确认提交 |
-| `/webnovel-chapter-discard` | `/webnovel-chapter-discard 12` | 抛弃第 12 章正文（草稿删除或版本点回退） |
+| `/webnovel-chapter-discard` | `/webnovel-chapter-discard 12` | 抛弃第 12 章正文（草稿删除或原地版本点回退） |
 | `/webnovel-write` | `/webnovel-write 45` | 写作并提交指定章节 |
 | `/webnovel-review` | `/webnovel-review 1-5` | 审查章节范围 |
 | `/webnovel-query` | `/webnovel-query 萧炎` | 查询角色、伏笔、状态等信息 |
@@ -390,7 +391,8 @@ git push origin feature/your-feature
 
 | 版本 | 主要变化 |
 |------|----------|
-| **v6.5.0 (当前)** | 最低 Python 版本提升到 3.12 |
+| **v6.6.0 (当前)** | 卷纲、章纲先和你讨论再生成，抛弃章节不再新建分支 |
+| **v6.5.0** | 最低 Python 版本提升到 3.12 |
 | **v6.4.0** | 一章不要了，直接抛弃 |
 | **v6.3.0** | 文风有档案，漏章藏不住，已定稿的事实也能改 |
 | **v6.2.1** | 修复 Windows 写章提交偶发的拒绝访问（WinError 5）：资料文件被短暂占用时自动重试 |

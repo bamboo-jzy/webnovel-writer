@@ -793,6 +793,33 @@ def test_plan_skill_covers_volume_outline_writeback_and_state_sync_contract():
     assert "CEN：" not in text
 
 
+# 规划对话闸门：生成卷级产物前必须先对话、落决策卡、过闸门。
+def test_plan_skill_requires_planning_dialogue_gate_before_generation():
+    """plan 必须先完成规划对话与决策卡闸门，未通过不落任何卷级产物。"""
+    text = _read_text(SKILLS_DIR / "webnovel-plan" / "SKILL.md")
+    for required in (
+        "先对话后生成",
+        "规划对话闸门",
+        "大纲/第{volume_id}卷-规划讨论.md",
+        "未决项",
+        "不再讨论",
+        "无轮次上限",
+        "不落任何卷级产物",
+        "跳过对话的开关",
+    ):
+        assert required in text, f"webnovel-plan: 缺少规划对话闸门约定 {required}"
+    dialogue_ref = SKILLS_DIR / "webnovel-plan" / "references" / "outlining" / "volume-dialogue.md"
+    assert dialogue_ref.is_file(), "plan 缺少规划对话 reference：references/outlining/volume-dialogue.md"
+
+
+# volume-revise 复用 plan 的对话话术与「不再讨论」语义，保持两个 skill 风格一致。
+def test_volume_revise_shares_planning_dialogue_option_wording():
+    text = _read_text(SKILLS_DIR / "webnovel-volume-revise" / "SKILL.md")
+    assert "webnovel-plan/references/outlining/volume-dialogue.md" in text
+    assert "不再讨论" in text
+    assert "作者确认" in text
+
+
 def test_chapter_plan_skill_covers_split_outline_nodes_and_contract_refresh():
     """红线 12：chapter-plan 负责独立章纲、结构化节点和章级合同。"""
     text = _read_text(SKILLS_DIR / "webnovel-chapter-plan" / "SKILL.md")
@@ -812,6 +839,35 @@ def test_chapter_plan_skill_covers_split_outline_nodes_and_contract_refresh():
         "--chapter-planned",
     ):
         assert required in text
+
+
+def test_chapter_plan_skill_covers_batch_dialogue_gate():
+    """章纲红线：chapter-plan 按批次先对话后生成，闸门未通过不落任何章级产物。"""
+    text = _read_text(SKILLS_DIR / "webnovel-chapter-plan" / "SKILL.md")
+    for required in (
+        "先对话后生成",
+        "章级规划对话闸门",
+        "大纲/第{volume_id}卷-章纲规划讨论.md",
+        "未决项",
+        "不再讨论",
+        "无轮次上限",
+        "不落任何章级产物",
+        "跳过对话的开关",
+    ):
+        assert required in text, f"webnovel-chapter-plan: 缺少章级规划对话闸门约定 {required}"
+    card = SKILLS_DIR / "webnovel-chapter-plan" / "references" / "outlining" / "chapter-dialogue.md"
+    assert card.is_file(), "webnovel-chapter-plan: 缺少章级规划对话 reference"
+    # 决策卡文件名不得落入自动发现模式，否则会被当成章纲文件或卷级详细大纲
+    card_name = "第{volume_id}卷-章纲规划讨论.md"
+    assert not re.match(r"第\d+章", card_name), "决策卡命名会被章纲发现模式 第{num}章*.md 误判"
+    assert not card_name.endswith("大纲.md"), "决策卡命名会被卷级大纲发现模式 第*卷*大纲.md 误判"
+
+
+def test_chapter_revise_shares_dialogue_confirm_loop():
+    """章纲修改与卷纲修改共用同一套确认话术：确认轮无上限且每轮带「不再讨论」。"""
+    text = _read_text(SKILLS_DIR / "webnovel-chapter-revise" / "SKILL.md")
+    for required in ("不再讨论", "无上限", "chapter-dialogue.md"):
+        assert required in text, f"webnovel-chapter-revise: 缺少确认话术约定 {required}"
 
 
 # ---------------------------------------------------------------------------

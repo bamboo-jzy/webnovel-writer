@@ -61,20 +61,20 @@
 ```text
 总纲
   ↓
-/webnovel-plan
+/webnovel-plan（先规划对话 → 决策卡闸门 → 生成卷级产物）
   ↓
 卷纲、卷节拍表、卷时间线
   ↓
-/webnovel-chapter-plan
+/webnovel-chapter-plan（先章级对话 → 决策卡闸门 → 生成章纲）
   ↓
 独立章纲与章级 Story System 合同
   ↓
 /webnovel-write
 ```
 
-`/webnovel-plan` 只负责卷级规划和设定/总纲同步；`/webnovel-volume-revise` 用确认式流程定向修改已有卷纲，`/webnovel-volume-reload` 负责人工编辑后的内容 revision 重载。revision 变化会把依赖旧卷纲的章纲登记为 `stale`，但不会覆盖作者文件；`/webnovel-chapter-plan` 在卷级产物齐全后按批次生成或刷新独立章纲与章节合同。卷纲完成本身不代表章节已经具备写作条件。
+`/webnovel-plan` 只负责卷级规划和设定/总纲同步；它在生成前必须先与作者逐轮讨论 10 项卷级必答议题（无轮次上限，每轮带「不再讨论」选项），把结论落成决策卡 `大纲/第N卷-规划讨论.md` 并通过闸门（未决项为 0、`BLOCKER` 为 0、作者已确认），未通过时不落任何卷级产物。`/webnovel-volume-revise` 用确认式流程定向修改已有卷纲（复用同一套有限选项与「不再讨论」话术），`/webnovel-volume-reload` 负责人工编辑后的内容 revision 重载。revision 变化会把依赖旧卷纲的章纲登记为 `stale`，但不会覆盖作者文件。
 
-卷纲 revision 以节拍表、时间线、详细大纲三份文件的名称与内容 SHA-256 为依据。写前门禁会比较章节记录的 `source_volume_revision` 与当前 revision；不一致时必须先重载卷纲并重新规划章纲。
+`/webnovel-chapter-plan` 在卷级产物齐全后按批次生成或刷新独立章纲与章节合同，同样采用「先对话后生成」：每个批次先讨论 10 项章级必答议题（批次切分与范围、卷级节拍节点到章号的映射、关键章目标、阻力与代价递增顺序、CEN → CBN 承接链、时间锚点与章内跨度、倒计时节奏、伏笔埋收、爽点与 Strand 分布、本批禁区），把结论累积到决策卡 `大纲/第N卷-章纲规划讨论.md`，未决项不为 0 时不落任何章级产物；首批问全 10 项，后续批次只问未决项与偏离项。`/webnovel-chapter-revise` 复用同一套确认话术定向修改已有章纲，并在修改后重刷章级合同。卷纲完成本身不代表章节已经具备写作条件。
 
 卷纲 revision 以节拍表、时间线、详细大纲三份文件的名称与内容 SHA-256 为依据。写前门禁会比较章节记录的 `source_volume_revision` 与当前 revision；不一致时必须先重载卷纲并重新规划章纲。
 

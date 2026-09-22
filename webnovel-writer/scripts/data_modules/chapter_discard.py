@@ -11,14 +11,28 @@
 会得到一本「读模型说没写过、状态却记得写过」的书：检索不到该章的场面，
 但主角状态、伏笔账、实体首次出场还在。
 
-所以本模块只提供两条安全路径：
+所以本模块只提供两条安全路径，**两条都不新建分支**：
 
 1. `discard_chapter_draft` —— 该章**没有 accepted commit** 时，正文、四份
    临时 artifacts、非 accepted 的 commit、章级 state 条目都还在「本章草稿」
    范畴内，可以直接删除；删除前整批归档到 `.webnovel/discarded/`。
-2. `rollback_chapter` —— 该章**已 accepted** 时，用版本点回退
-   （`git switch -c rewrite-from-chXXXX chXXXX`）让整棵树回到该章之前。
-   回退不删除任何提交：原分支仍指向被抛弃的那次提交，随时可取回。
+2. `rollback_chapter` —— 该章**已 accepted** 时，把工作树**原地**恢复成版本点
+   （`ch{N-1}`）的内容，再在**当前分支**追加一次「抛弃第 N 章」提交。
+   全程不新建分支、不移动既有引用、不改写历史：被抛弃的那次提交仍是当前
+   分支历史的一部分（新提交的父提交），版本点 tag `ch{N}` 也仍指向它。
+
+为什么已 accepted 章也用「原地恢复 + 追加提交」而不是另开分支
+--------------------------------------------------------------
+另开分支（`git switch -c rewrite-from-chXXXX chXXXX`）在单书工作区里会不断
+堆积一次性分支，且分支名固定 → 同名分支存在时第二次抛弃被自己的检查挡下，
+需要人工删分支才能继续。原地恢复没有这些副作用，效果等价：
+- 文件层面与切分支完全一致 —— 索引与工作树来自版本点，累计字段
+  （`plot_threads` / `strand_tracker` / `protagonist_state` / `world_settings`）
+  随 `state.json`、`index.db` 整体还原，不做外科删除；
+- 被抛弃的正文/commit 先复制到 `.webnovel/discarded/`，另有 tag `ch{N}`
+  与父提交两条 git 取回路径；
+- 之后重写同一章号时 `backup` 会把 `ch{N}` 前移，旧点自动留成
+  `ch{N}-prev-<时间戳>`，与「同章重写」既有流程一致。
 
 两条路径都只允许处理**最后一章**（序列中不留空洞）。中间章会让后续章
 失去「前置章」，必须连带回退或重写，不属于本模块的能力。
@@ -56,8 +70,7 @@ from .chapter_reloading import (
 
 SCHEMA_VERSION = "webnovel-chapter-discard/v1"
 DISCARD_DIR_REL = Path(".webnovel") / "discarded"
-ROLLBACK_BRANCH_PREFIX = "rewrite-from-ch"
-INITIAL_ROLLBACK_BRANCH = "rewrite-from-start"
+ROLLBACK_MODE = "in_place"
 REVIEW_REPORT_DIR = "审查报告"
 STATE_REL = Path(".webnovel") / "state.json"
 
@@ -219,16 +232,23 @@ def _total_words_after(root: Path, state: dict, *, exclude: int = 0) -> int:
 # 预览 / 检查
 # ---------------------------------------------------------------------------
 
+def discard_commit_message(chapter: int, target_ref: str) -> str:
+    """原地回退时追加的那次提交的说明（目标传 sha 时用短号，便于在日志里读）。"""
+    label = target_ref[:8] if re.fullmatch(r"[0-9a-f]{40}", target_ref or "") else target_ref
+    return f"Discard chapter {int(chapter)}: restore to {label}"
+
+
 def _rollback_probe(root: Path, chapter: int) -> dict:
-    """回退的 git 侧取证：目标版本点、工作树、原分支。"""
+    """原地回退的 git 侧取证：目标版本点、工作树、当前分支。不新建分支。"""
     probe: dict[str, Any] = {
         "git_available": False,
+        "mode": ROLLBACK_MODE,
+        "creates_branch": False,
         "target_kind": "",
         "target_tag": "",
         "target_commit": "",
-        "branch_name": "",
-        "branch_exists": False,
         "command": "",
+        "commit_message": "",
         "source_branch": "",
         "source_commit": "",
         "dirty_paths": [],
@@ -281,21 +301,24 @@ def _rollback_probe(root: Path, chapter: int) -> dict:
         else:
             probe["target_commit"] = root_commits[0]
 
-    branch_name = (
-        f"{ROLLBACK_BRANCH_PREFIX}{chapter - 1:04d}" if chapter > 1 else INITIAL_ROLLBACK_BRANCH
-    )
-    probe["branch_name"] = branch_name
-    ok, _, _ = _git(root, "rev-parse", "--verify", f"refs/heads/{branch_name}")
-    probe["branch_exists"] = ok
-    if ok:
-        probe["blockers"].append({
-            "code": "rollback_branch_exists",
-            "message": f"分支 {branch_name} 已存在；请先处理它（改名或删除），避免覆盖上一次回退结果。",
-        })
+    # 原地恢复是把目标版本点的内容盖到当前分支上，目标必须是当前分支的祖先，
+    # 否则会把两段不相关的历史拼在一起（例如手工建过的同名 tag）。
+    if probe["target_commit"]:
+        ok, _, _ = _git(root, "merge-base", "--is-ancestor", probe["target_commit"], "HEAD")
+        if not ok:
+            label = probe["target_tag"] or probe["target_commit"][:8]
+            probe["blockers"].append({
+                "code": "version_point_not_ancestor",
+                "message": (
+                    f"回退目标 {label} 不在当前分支的历史上；原地恢复会把两段不相关的历史混在一起。"
+                    "请转人工处理（确认版本点来源，或改用分支方式手工回退）。"
+                ),
+            })
 
     target_ref = probe["target_tag"] or probe["target_commit"]
     if target_ref:
-        probe["command"] = f"git switch -c {branch_name} {target_ref}"
+        probe["command"] = f"git read-tree -u --reset {target_ref}"
+        probe["commit_message"] = discard_commit_message(chapter, target_ref)
 
     ok, porcelain, _ = _git(root, "-c", "core.quotepath=false", "status", "--porcelain", "--untracked-files=no")
     if not ok:
@@ -310,21 +333,27 @@ def _rollback_probe(root: Path, chapter: int) -> dict:
                 "code": "working_tree_dirty",
                 "message": (
                     f"工作树有 {len(probe['dirty_paths'])} 个未提交的受管改动；"
-                    "先提交或 stash，否则回退会带走/丢弃它们。"
+                    "先提交或 stash，否则原地回退会覆盖掉它们。"
                 ),
             })
-
-    if probe["source_commit"]:
-        where = probe["source_branch"] or f"detached HEAD（{probe['source_commit'][:8]}）"
-        probe["recovery_hint"] = (
-            f"回退不删除提交：{where} 仍指向被抛弃的那次提交，"
-            f"需要取回时 git switch {probe['source_branch'] or probe['source_commit'][:8]}。"
-        )
 
     ok, vp_commit, _ = _git(root, "rev-parse", f"{probe['version_point_tag']}^{{commit}}")
     probe["version_point_exists"] = ok
     if ok:
         probe["version_point_commit"] = vp_commit
+
+    if probe["source_commit"]:
+        where = probe["source_branch"] or f"detached HEAD（{probe['source_commit'][:8]}）"
+        tag_note = (
+            f"版本点 {probe['version_point_tag']} 也仍指向它；"
+            if probe["version_point_exists"] and vp_commit == probe["source_commit"]
+            else ""
+        )
+        probe["recovery_hint"] = (
+            f"不新建分支、不删除提交：被抛弃的提交仍是当前分支历史的一部分"
+            f"（{where} 上的 {probe['source_commit'][:8]}，会成为新提交的父提交），{tag_note}"
+            f"正文副本另存 .webnovel/discarded/。"
+        )
     return probe
 
 
@@ -448,11 +477,13 @@ def plan_chapter_discard(project_root: str | Path, chapter: int, *, state: dict 
             f"保留 大纲/第{chapter}章-*.md 章纲，作者可直接重写",
         ]
     elif plan["classification"] == "accepted":
+        target_label = rollback.get("target_tag") or rollback.get("target_commit") or f"ch{chapter - 1:04d}"
         plan["planned_actions"] = [
-            f"确认回退目标版本点（抛弃第 {chapter} 章 → 回到第 {chapter - 1} 章完成后的状态）",
-            f"执行 {rollback.get('command') or 'git switch -c <分支> <版本点>'}",
-            "回退会同时还原 正文 / .story-system/commits / state.json / index.db / summaries / projection_log",
-            "回退不删除提交：原分支仍指向被抛弃的提交，可取回",
+            f"归档 正文 下第 {chapter} 章正文与本章 commit 到 .webnovel/discarded/",
+            f"把工作树与索引原地恢复成版本点 {target_label} 的内容（{rollback.get('command') or 'git read-tree -u --reset <版本点>'}）",
+            f"在当前分支追加一次「抛弃第 {chapter} 章」提交（{rollback.get('commit_message') or 'Discard chapter N: restore to <版本点>'}）",
+            "同时还原 正文 / 大纲 / 设定集 / 文风 / .story-system 与 .webnovel 状态文件（含 index.db）",
+            "不新建分支、不删除提交、不移动版本点 tag：被抛弃的提交仍是当前分支历史的一部分",
         ]
     return plan
 
@@ -688,7 +719,7 @@ def discard_chapter_draft(
 
 
 # ---------------------------------------------------------------------------
-# 版本点回退
+# 已提交章：原地回退（不新建分支）
 # ---------------------------------------------------------------------------
 
 def rollback_chapter(
@@ -698,12 +729,16 @@ def rollback_chapter(
     dry_run: bool = False,
     reason: str = "",
 ) -> dict:
-    """已提交章走版本点回退：`git switch -c <分支> <ch{N-1}>`。不删除任何提交。"""
+    """已提交章原地回退：归档正文 → `git read-tree -u --reset <版本点>` → 当前分支追加提交。
+
+    不新建分支、不移动既有引用、不删除提交：被抛弃的提交会成为新提交的父提交。
+    """
     root = Path(project_root).resolve()
     chapter = _safe_int(chapter)
     report: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "action": "rollback",
+        "mode": ROLLBACK_MODE,
         "chapter": chapter,
         "dry_run": bool(dry_run),
         "ok": False,
@@ -718,51 +753,106 @@ def rollback_chapter(
         report["error"] = "blocked"
         return report
     if dry_run:
-        report.update(ok=True, status="preview", command=rollback.get("command", ""))
+        report.update(
+            ok=True,
+            status="preview",
+            command=rollback.get("command", ""),
+            commit_message=rollback.get("commit_message", ""),
+        )
         return report
 
     command = str(rollback.get("command") or "")
     target_ref = rollback.get("target_tag") or rollback.get("target_commit") or ""
-    branch_name = str(rollback.get("branch_name") or "")
-    if not (command and target_ref and branch_name):
+    target_commit = str(rollback.get("target_commit") or "")
+    commit_message = str(rollback.get("commit_message") or "")
+    if not (command and target_ref and target_commit and commit_message):
         report["blockers"] = [{"code": "rollback_plan_incomplete", "message": "回退计划不完整，拒绝执行"}]
         report["error"] = "blocked"
         return report
 
-    ok, out, err = _git(root, "switch", "-c", branch_name, target_ref)
-    report["command"] = command
-    report["stdout"] = out
-    if not ok:
-        report["error"] = err or out or "git switch failed"
+    report.update(command=command, target_ref=target_ref, target_commit=target_commit,
+                  commit_message=commit_message)
+
+    # 1) 先归档被抛弃的正文与本章 commit（与草稿路径同一归档口径，可原样复制回去）
+    archived: list[str] = []
+    archive = _archive_target(root, chapter)
+    try:
+        archive.mkdir(parents=True, exist_ok=False)
+        for path in _body_candidates(root, chapter):
+            archived.append(_copy_into(root, path, archive))
+        commit_file = commit_path(root, chapter)
+        if commit_file.is_file():
+            archived.append(_copy_into(root, commit_file, archive))
+        report["archive_dir"] = str(archive)
+        report["archived"] = sorted(set(archived))
+    except (OSError, ValueError, TypeError, AtomicWriteError) as exc:
+        report["error"] = f"归档失败，未修改任何文件：{exc}"
         return report
 
+    # 2) 原地把索引与工作树恢复成版本点内容。只动受管文件：
+    #    未跟踪文件（含上面的归档目录）保留，既有提交与 tag 都不受影响。
+    ok, out, err = _git(root, "read-tree", "-u", "--reset", target_ref)
+    report["stdout"] = out
+    if not ok:
+        report["error"] = f"原地恢复失败（正文与 commit 已归档在 {archive}）：{err or out}"
+        return report
+    if not archive.exists():  # 归档目录被同步进来后又消失：只可能是它本来被跟踪
+        source = str(rollback.get("source_commit") or "")
+        label = source[:8] if source else "HEAD^"
+        report.setdefault("warnings", []).append(
+            f"归档目录 {archive} 在恢复过程中被覆盖；被抛弃的正文仍可用 git show {label}:正文/第{chapter}章-*.md 取回。"
+        )
+
+    # 3) 在当前分支追加一次「抛弃」提交；工作树已等于版本点时不产生空提交
+    staged_ok, staged_paths, staged_err = _git(
+        root, "-c", "core.quotepath=false", "diff", "--cached", "--name-only", "HEAD"
+    )
+    if not staged_ok:
+        report["error"] = (
+            f"无法读取暂存区（工作树已恢复，提交未落盘）：{staged_err or staged_paths}；"
+            f"可手工执行 git commit -m \"{commit_message}\""
+        )
+        return report
+    report["changed_paths"] = [line.strip() for line in staged_paths.splitlines() if line.strip()]
+    if report["changed_paths"]:
+        ok, out, err = _git(root, "commit", "-m", commit_message)
+        report["commit_stdout"] = out
+        if not ok:
+            report["error"] = (
+                f"git commit 失败（工作树已恢复成版本点，提交未落盘）：{err or out}；"
+                f"可手工执行 git commit -m \"{commit_message}\""
+            )
+            return report
+    else:
+        report.setdefault("warnings", []).append(
+            f"工作树已等于 {target_ref}，没有产生新的提交。"
+        )
+
+    # 4) 回退后核对：新提交的树 == 版本点、本章正文消失、current_chapter 已回退
     ok, head, _ = _git(root, "rev-parse", "HEAD")
     report["head_commit"] = head if ok else ""
-    target_commit = str(rollback.get("target_commit") or "")
-    verified = bool(target_commit) and report["head_commit"] == target_commit
+    tree_ok, _, _ = _git(root, "diff", "--quiet", target_commit, "HEAD")
     body_left = _body_candidates(root, chapter)
     state_after = read_object(root / STATE_REL, optional=True)
     current_after = _safe_int((state_after.get("progress") or {}).get("current_chapter"))
     report.update(
-        ok=verified and not body_left,
+        ok=tree_ok and not body_left,
         status="rolled_back",
-        target_ref=target_ref,
-        target_commit=target_commit,
-        branch=branch_name,
-        head_matches_target=verified,
+        tree_matches_target=tree_ok,
         chapter_body_absent=not body_left,
         current_chapter_after=current_after,
         source_branch=rollback.get("source_branch", ""),
         source_commit=rollback.get("source_commit", ""),
         recovery_hint=rollback.get("recovery_hint", ""),
         next_steps=[
-            f"当前在分支 {branch_name}，处于「第 {chapter - 1} 章完成后」的状态。",
+            f"仍在分支 {rollback.get('source_branch') or '当前分支'}，工作树是「第 {chapter - 1} 章完成后」的状态。",
             f"要写的下一章仍是第 {chapter} 章；章纲 大纲/第{chapter}章-*.md 未被回退影响。",
-            "确认无误后继续写作；被抛弃的正文可用 git show 从原分支取回核对。",
+            f"被抛弃的正文可用 git show {rollback.get('source_commit', 'HEAD^')[:8]}:正文/第{chapter}章-*.md 取回，"
+            f"另有归档副本在 {archive}。",
         ],
     )
     if not report["ok"]:
-        report["error"] = "回退后核对未通过：正文或 HEAD 与预期不一致，请先 git status 手工确认。"
+        report["error"] = "回退后核对未通过：工作树或正文与预期不一致，请先 git status 手工确认。"
     return report
 
 
@@ -774,6 +864,7 @@ def format_chapter_discard_report(report: dict, output_format: str = "text") -> 
     if output_format == "json":
         return json.dumps(report, ensure_ascii=False, indent=2)
     plan = report.get("plan") or {}
+    creates_branch = bool((plan.get("rollback") or {}).get("creates_branch"))
     lines = [
         f"{'OK' if report.get('ok') else 'ERROR'} chapter-discard {report.get('action')}",
         f"chapter: {report.get('chapter')}",
@@ -782,10 +873,15 @@ def format_chapter_discard_report(report: dict, output_format: str = "text") -> 
         f"commit_status: {plan.get('commit_status', '')}",
         f"downstream_chapters: {plan.get('downstream_chapters', [])}",
         f"status: {report.get('status', 'preview' if report.get('dry_run') else '')}",
+        f"mode: {report.get('mode', '')}",
+        f"creates_branch: {creates_branch}",
         f"archive_dir: {report.get('archive_dir', '')}",
         f"removed: {report.get('removed', [])}",
         f"kept: {report.get('kept', [])}",
         f"command: {report.get('command', '')}",
+        f"commit_message: {report.get('commit_message', '')}",
+        f"changed_paths: {report.get('changed_paths', [])}",
+        f"tree_matches_target: {report.get('tree_matches_target', '')}",
         f"current_chapter_after: {report.get('current_chapter_after', '')}",
         f"recovery_hint: {report.get('recovery_hint', '')}",
         f"error: {report.get('error', '')}",

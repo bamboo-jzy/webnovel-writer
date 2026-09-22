@@ -5,7 +5,7 @@
 > 不登记普通项目数据读取，例如 `.webnovel/state.json`、`设定集/*.md`、`大纲/*.md`、`index.db`。
 > **「Reference」列永远是外部参考文件，不登记 SKILL.md 自身。**
 >
-> 覆盖度：**17/17 skill**（2026-09-21 复核，新增 `webnovel-chapter-discard`）。维护方式：改任一 `SKILL.md` 的 reference 表后，必须回写本文件；取证脚本见 `.workbuddy/tmp/audit_reference_usage.py`。
+> 覆盖度：**17/17 skill**（2026-09-21 复核，新增 `webnovel-chapter-discard`；2026-09-22 新增 `webnovel-plan` 规划对话 reference 与 `webnovel-volume-revise` 共享话术引用；同日再新增 `webnovel-chapter-plan` 章级对话 reference 与 `webnovel-chapter-revise` 共享话术引用）。维护方式：改任一 `SKILL.md` 的 reference 表后，必须回写本文件；取证脚本见 `.workbuddy/tmp/audit_reference_usage.py`。
 
 ---
 
@@ -30,6 +30,8 @@
 | webnovel-init | Step 5 | 卡顿 | `skills/webnovel-init/references/creativity/inspiration-collection.md` | 区段 | 所需采集小节 |
 | webnovel-init | Step 5 | 题材映射命中 | `skills/webnovel-init/references/creativity/anti-trope-*.md` | 区段 | 对应反套路项 |
 | webnovel-init | Step 6 | always | `skills/webnovel-init/references/worldbuilding/setting-consistency.md` | 区段 | 一致性校验小节 |
+| webnovel-plan | Step 1.5 | always | `skills/webnovel-plan/references/outlining/volume-dialogue.md` | 全文 | — |
+| webnovel-plan | Step 1.6 | always | `skills/webnovel-plan/references/outlining/volume-dialogue.md` | 区段 | `## 四、决策卡模板`、`## 五、闸门清单` |
 | webnovel-plan | Step 4 | always | `templates/output/大纲-卷节拍表.md` | 全文 | — |
 | webnovel-plan | Step 5 | always | `templates/output/大纲-卷时间线.md` | 全文 | — |
 | webnovel-plan | Step 6 | always | `references/genre-profiles.md` | 区段 | 当前 genre 的单个 `### 2.x`；按需加 `## 一、Profile 字段说明` |
@@ -37,11 +39,14 @@
 | webnovel-plan | Step 6 | 需要爽点设计 | `references/shared/cool-points-guide.md` | 区段 | 所需爽点维度段；题材适配取 `## 九、题材适配` |
 | webnovel-plan | Step 6 | 需要冲突设计 | `skills/webnovel-plan/references/outlining/conflict-design.md` | 区段 | 对应冲突类型小节 |
 | webnovel-plan | Step 6 | 特定题材节奏 | `skills/webnovel-plan/references/outlining/genre-volume-pacing.md` | 全文 | — |
+| webnovel-chapter-plan | Step 1.5 | always | `skills/webnovel-chapter-plan/references/outlining/chapter-dialogue.md` | 全文 | — |
+| webnovel-chapter-plan | Step 1.6 | always | `skills/webnovel-chapter-plan/references/outlining/chapter-dialogue.md` | 区段 | `## 五、决策卡模板`、`## 六、闸门清单` |
 | webnovel-chapter-plan | Step 3 | always | `skills/webnovel-plan/references/outlining/chapter-planning.md` | 区段 | `## 10. 结构化节点规范（CBN/CPNs/CEN）`；需模板时加 `## 7. 章节规划模板` |
 | webnovel-chapter-plan | Step 3 | always | `references/outlining/plot-signal-vs-spoiler.md` | 全文 | — |
 | webnovel-chapter-plan | Step 3 | 需要爽点/追读力（按需） | `references/reading-power-taxonomy.md` / `references/shared/cool-points-guide.md` | 区段 | 按需取钩子、爽点和即时满足段 |
 | webnovel-chapter-plan | Step 3 | 需要冲突设计（按需） | `skills/webnovel-plan/references/outlining/conflict-design.md` | 区段 | 对应冲突类型小节 |
 | webnovel-chapter-plan | Step 3 | 特定题材节奏（按需） | `skills/webnovel-plan/references/outlining/genre-volume-pacing.md` | 全文 | — |
+| webnovel-volume-revise | Step 2 | always | `skills/webnovel-plan/references/outlining/volume-dialogue.md` | 区段 | `## 三、每轮话术模板`（有限选项 + 「不再讨论」语义） |
 | webnovel-write | Step 4 | always | `skills/webnovel-write/references/polish-guide.md` | 区段 | 主路径 `## 2. 执行顺序（必须按序）`；Anti-AI 终检 `## 2A. Anti-AI 检测细则` / `## Phase 1 增补：Anti-AI 规范（7层，原版）` |
 | webnovel-write | Step 4 | always | `skills/webnovel-write/references/writing/typesetting.md` | 全文 | — |
 | webnovel-write | Step 4 | always | `skills/webnovel-write/references/style-adapter.md` | 全文 | — |
@@ -102,11 +107,11 @@
 | Skill | 说明 |
 |-------|------|
 | webnovel-outline-revise | 只改 `大纲/总纲.md` 与确认后的设定集增量；冻结线直接扫 `.story-system/commits/chapter_*.commit.json` |
-| webnovel-volume-revise | 只改三份卷级产物；不加载 reference |
+| webnovel-volume-revise | 只改三份卷级产物；唯一外部引用是 `webnovel-plan` 的规划对话话术模板（见上表，用于确认轮），无自己的 reference 目录 |
 | webnovel-volume-reload | 只校验并重算三份卷级产物的 revision |
-| webnovel-chapter-revise | 只改 `大纲/第N章-*.md`；合同刷新走 `story-system`（见上一节） |
+| webnovel-chapter-revise | 只改 `大纲/第N章-*.md`；唯一外部引用是 `webnovel-chapter-plan` 的章级规划对话话术模板（见上表 Step 1.5/1.6，用于确认轮），无自己的 reference 目录；合同刷新走 `story-system`（见上一节） |
 | webnovel-chapter-reload | 只重载人工正文并重新校验 artifacts；合同由 CLI 侧处理 |
-| webnovel-chapter-discard | 只跑 `chapter-discard` 的预览/草稿删除/版本点回退；归档与 `git switch` 都在 CLI 内完成，不加载独立 reference |
+| webnovel-chapter-discard | 只跑 `chapter-discard` 的预览/草稿删除/原地回退；归档、`git read-tree -u --reset` 与追加提交都在 CLI 内完成，不加载独立 reference |
 | webnovel-dashboard | 只读面板启动流程，不加载独立 reference；核心校验接口是 `/api/story-runtime/health` 与 `/api/preflight` |
 | webnovel-learn | 只读 state 后追加 `.webnovel/project_memory.json` |
 | webnovel-doctor | 只跑只读体检与索引对账，不加载独立 reference |

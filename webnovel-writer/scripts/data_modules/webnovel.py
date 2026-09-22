@@ -602,7 +602,7 @@ def main() -> None:
     discard_mode = p_chapter_discard.add_mutually_exclusive_group()
     discard_mode.add_argument("--dry-run", action="store_true", help="只预览，不写入（默认）")
     discard_mode.add_argument("--draft", action="store_true", help="执行：删除未提交草稿（先归档到 .webnovel/discarded/）")
-    discard_mode.add_argument("--rollback", action="store_true", help="执行：已提交章回退到上一章版本点（git switch -c）")
+    discard_mode.add_argument("--rollback", action="store_true", help="执行：已提交章原地回退到上一章版本点（不新建分支）")
     p_chapter_discard.add_argument("--reason", default="", help="抛弃理由，记入归档清单")
     p_chapter_discard.add_argument("--format", choices=["json", "text"], default="text", help="输出格式")
     p_chapter_discard.set_defaults(func=cmd_chapter_discard)

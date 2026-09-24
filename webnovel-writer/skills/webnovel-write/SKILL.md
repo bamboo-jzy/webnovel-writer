@@ -371,7 +371,13 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" use
 
 审查缺失→重跑 Step 3。摘要/状态/记忆缺失→重跑 Step 5。润色失真→回 Step 4 修复后重跑 Step 5。
 
-作者说**整章不要了**（不是"改几处"，是整章作废重写）时，不要走上面的补跑，也不要走 `/webnovel-chapter-reload`（那条链保留章号、重载人工正文）：走 `/webnovel-chapter-discard`。该章**已 accepted** 时它走版本点回退（等价于先 `git status --short` 确认工作区干净，再 `git switch -c rewrite-from-ch0009 ch0009` 抛弃第 10 章）；**还没 accepted** 时它把正文、本章 artifacts 与章级 state 归档后直接删除。`chNNNN` 是"第 N 章**完成后**"的状态，所以抛弃第 10 章要退到 `ch0009`，退到 `ch0010` 只会把这章原样留着。两条路都只允许处理最后一章，有后续章会被 `downstream_chapters_exist` 阻断。之后按正常流程重写第 10 章即可，正文、commit、索引行、state 与摘要一起回到第 9 章完成时；被抛弃的提交和 `ch0010` tag 仍留在仓库里，`git show ch0010:"正文/第10章-*.md"` 随时可取回。第 1 章没有 `ch0000`，改用仓库初始提交（分支 `rewrite-from-start`）。完整清单与边界见运维手册的「抛弃刚写完的一章」。
+作者说**整章不要了**（不是"改几处"，是整章作废重写）时，不要走上面的补跑，也不要走 `/webnovel-chapter-reload`（那条链保留章号、重载人工正文）：走 `/webnovel-chapter-discard`。该章**已 accepted** 时它走原地回退（等价于先 `git status --short` 确认工作区干净，再 `git read-tree -u --reset ch0009` 把工作树与索引恢复成第 9 章完成时，并在**当前分支**追加一次「抛弃第 10 章」提交；不新建分支、不删除提交）；**还没 accepted** 时它把正文、本章 artifacts 与章级 state 归档后直接删除。`chNNNN` 是"第 N 章**完成后**"的状态，所以抛弃第 10 章要退到 `ch0009`，退到 `ch0010` 只会把这章原样留着。两条路都只允许处理最后一章，有后续章会被 `downstream_chapters_exist` 阻断。之后按正常流程重写第 10 章即可，正文、commit、索引行、state 与摘要一起回到第 9 章完成时；被抛弃的提交仍留在当前分支历史里，`ch0010` tag 也不移动，`git show ch0010:"正文/第10章-*.md"` 随时可取回。第 1 章没有 `ch0000`，改用仓库初始提交。完整清单与边界见运维手册的「抛弃刚写完的一章」。
+
+**改完章纲想重新生成正文**时，先看本章状态，两条路都成立但顺序不同：
+
+- **正文还是草稿（本章未 accepted）**：先用 `/webnovel-chapter-revise {chapter_num}` 改章纲并**刷新章级合同**——只改章纲不刷合同会让 phase 落到 `plan_in_progress`，prewrite gate 报 `chapter_contract_stale`——再跑本流程；`run-ledger write-resume` 会因章纲晚于正文给出 `outline_newer_than_draft` 确认项，选「重新起草」即重新生成正文（先备份、重新登记输入，不复用旧审查结果）。
+- **本章已 accepted**：**不能直接重跑**。`chapter_committed` 不在写前允许的 phase 里，prewrite gate 恒报 `phase_not_ready_for_prewrite`，与是否刷新合同无关；必须先用 `/webnovel-chapter-discard {chapter_num}` 把这章回退掉（**回退会整树还原，所以先回退、再改章纲**，否则章纲改动会被一起回退），然后改章纲、再写。
+- 本章后面还有已提交的章时，discard 会被 `downstream_chapters_exist` 阻断；此时没有「只重生成某一章正文」的入口，只能人工改写正文后走 `/webnovel-chapter-reload {chapter_num}`，或从这一章起整条尾巴回退重写。
 
 ## 作者友好最终报告契约
 

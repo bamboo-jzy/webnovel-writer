@@ -870,6 +870,19 @@ def test_chapter_revise_shares_dialogue_confirm_loop():
         assert required in text, f"webnovel-chapter-revise: 缺少确认话术约定 {required}"
 
 
+def test_write_skill_describes_discard_as_in_place_rollback():
+    """`webnovel-write` 的弃稿段必须与 chapter-discard 同口径：原地回退，不教新建分支。
+
+    该段一度残留旧口径（`git switch -c rewrite-from-*`），与 v6.6.0 起的
+    `ROLLBACK_MODE = "in_place"` 相矛盾——作者照它手工操作会另开分支。
+    """
+    text = _read_text(SKILLS_DIR / "webnovel-write" / "SKILL.md")
+    assert "/webnovel-chapter-discard" in text
+    assert "read-tree" in text, "webnovel-write: 弃稿段未说明原地回退机制"
+    for forbidden in ("git switch -c", "rewrite-from"):
+        assert forbidden not in text, f"webnovel-write: 弃稿段仍在教新建分支 {forbidden}"
+
+
 # ---------------------------------------------------------------------------
 # 8. B 类跨层新契约（plan §5.2-B / §4.5 写入所有权矩阵）
 #    tools↔落盘一致性现状已满足 → 作通过型守护；

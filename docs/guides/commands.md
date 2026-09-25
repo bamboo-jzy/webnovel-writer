@@ -28,7 +28,9 @@ Skill 先计算冻结线、读取冻结线内各章已发布事实，把诉求�
 /webnovel-outline-revise 把结局从悲剧改为大团圆
 ```
 
-不会修改卷级文件、章纲、正文或 `.story-system/`；整文件重写总纲被禁止，只做定向编辑。
+不会修改卷级文件、章纲、正文或 `.story-system/`（方向裁决记录除外）；整文件重写总纲被禁止，只做定向编辑。
+
+**方向透传约束**（总-卷节点，本命令是上溯终点）：总纲必须与**非最后一卷**的既有卷纲保持同向——那些卷纲是既定事实，不能为了配合总纲改动而被改写。修改后按卷分流：最后一卷可指向 `/webnovel-volume-revise`；非最后一卷只能把总纲调回与该卷卷纲同向，或登记 `accepted_deviation`。总纲没有 revision 字段，`handoff --node master_to_volume --check` 只能比对卷号存在性与章节范围，卷名/核心冲突/卷末高潮一律须作者裁决。
 
 ### `/webnovel-plan [卷号]`
 
@@ -40,6 +42,8 @@ Skill 先计算冻结线、读取冻结线内各章已发布事实，把诉求�
 /webnovel-plan 1
 /webnovel-plan 2
 ```
+
+**方向透传约束**：生成前必须先过总-卷方向检查（`handoff --node master_to_volume --check --target {volume_id}`）。只允许生成**最后一卷**的卷纲，其余已规划卷是既定事实；本卷不在可改单元内时阻断并指向 `/webnovel-volume-revise`。候选偏离须用 `handoff --record` 落盘；裁决为「改总纲」时停止本命令，改走 `/webnovel-outline-revise`。
 
 ### `/webnovel-chapter-plan [卷号] [章节范围]`
 
@@ -55,6 +59,8 @@ Skill 先计算冻结线、读取冻结线内各章已发布事实，把诉求�
 
 已有且非空的独立章纲视为作者资产，不会被自动覆盖；失败时只重做当前批次。
 
+**方向透传约束**：本批章纲必须与卷纲同向（节点 `volume_to_chapter`），只允许演进**最后一章**的章纲。对话阶段的「卷级节拍节点到章号映射」即方向对齐议题；生成完成后 Step 4 必须用 `handoff --node volume_to_chapter --check --target {chapter_num}` 逐批复核，候选偏离裁决后落盘。裁决为「改卷纲」时停止本命令，先过 `handoff --node master_to_volume`，再由 `/webnovel-volume-revise` 修改并重跑 `/webnovel-volume-reload`。
+
 ### `/webnovel-chapter-revise [章号] [修改诉求]`
 
 以确认式流程修改已有章纲。Skill 会先读取目标章纲、所属卷三份卷级文件、总纲、相邻章纲和状态证据，展示保留项、修改项及对相邻章承接、时间线、伏笔的影响；确认轮没有上限，每轮带「不再讨论」选项，只有作者确认后才备份并定向编辑。修改后重新校验章纲、刷新章级 Story System 合同，并用 `update-state --chapter-planned` 自动重算章纲 revision 与合同 revision 重登记。
@@ -66,14 +72,23 @@ Skill 先计算冻结线、读取冻结线内各章已发布事实，把诉求�
 
 不会自动覆盖卷级文件或其他章纲；若诉求与卷级规划冲突，会阻断并指向 `/webnovel-volume-revise`。该章已有正文时，章纲修订不改正文；完成后按提示运行 `/webnovel-chapter-reload` 走正文重载链。
 
+**方向透传约束**：只允许修改**最后一章**的章纲（节点 `volume_to_chapter`），其余已规划章是既定事实。Step 1 会先用 `handoff --node volume_to_chapter --check --target {chapter_num}` 复核本章与卷纲是否同向；写入前须把候选偏离的裁决（`align_downstream` / `align_upstream` / `accepted_deviation`）用 `handoff --record` 落盘。裁决为「改卷纲」时停止本命令，先过 `handoff --node master_to_volume`，再由 `/webnovel-volume-revise` 修改，卷纲变化后重跑 `/webnovel-volume-reload`。
+
 ### `/webnovel-volume-revise [卷号] [修改诉求]`
 
-以确认式流程修改已有卷纲。Skill 会先读取三份卷级文件、总纲、设定和状态，展示保留项、修改项及影响章节；只有作者确认后才定向编辑。确认轮没有上限，每轮都带「不再讨论，按当前已确认范围结束」选项，选择即结束确认；仍待定的项保持原样。修改前会备份卷纲和状态，修改后校验并刷新 revision，不会自动覆盖独立章纲或章级合同。
+以确认式流程修改已有卷纲。Skill 会先读取三份卷级文件、总纲、设定和状态，展示保留项、修改项及影响章节；只有作者确认后才定向编辑。确认轮没有上限，每轮都带「不再讨论，按当前已确认范围结束」选项，选择即结束确认；仍待定的项保持原样。修改前会备份卷纲和状态，修改后校验并刷新 revision，不会自动覆盖独立章纲或章级合同。卷纲只演进**尚无章纲覆盖**的部分：已被已存在章纲落实的卷级内容（节拍、时间锚点、倒计时、角色状态、伏笔推进、章级承接）是既定事实，不得修改——这类诉求会转为修改对应章纲（`/webnovel-chapter-revise {章号}`）。正文经由章纲与卷纲关联，章纲锁定即意味着正文同样不动。
 
 ```bash
 /webnovel-volume-revise 1
 /webnovel-volume-revise 1 调整卷末反派身份，但保留前半卷节奏
 ```
+
+**方向透传约束**：有两层边界同时生效。
+
+- **卷粒度**（节点 `master_to_volume`）：只允许修改**最后一卷**的卷纲，其余已规划卷是既定事实。Step 1 会先用 `handoff --node master_to_volume --check --target {volume_id}` 复核本卷与总纲是否同向。
+- **章粒度**：卷内已被独立章纲覆盖的内容仍是锁定区，只能演进尚无章纲覆盖的部分。
+
+候选偏离的裁决（`align_downstream` / `align_upstream` / `accepted_deviation`）必须在写入前用 `handoff --record` 落盘。裁决为「改总纲」时停止本命令，改走 `/webnovel-outline-revise`。
 
 ### `/webnovel-volume-reload [卷号]`
 
@@ -83,7 +98,9 @@ Skill 先计算冻结线、读取冻结线内各章已发布事实，把诉求�
 /webnovel-volume-reload 1
 ```
 
-受影响章节需重新运行 `/webnovel-chapter-plan`，在章纲和章级合同刷新前，`/webnovel-write` 的写前门禁会阻断过期章节。
+重载结果按既定事实分流：已有章纲或正文的章（`protected_chapters`）零动作，其章纲调整走 `/webnovel-chapter-revise {chapter_num}`；尚无章纲的章（`open_chapters`）才运行 `/webnovel-chapter-plan`。报告会输出作用域声明，说明本次只写入卷级文件、锁定章的章纲与正文均未修改。在章纲和章级合同刷新前，`/webnovel-write` 的写前门禁会阻断过期章节。
+
+**方向透传约束**：只允许重载**最后一卷**的卷纲（节点 `master_to_volume`），其余已规划卷是既定事实。重载前先运行 `handoff --node master_to_volume --check --target {volume_id}`；报出候选偏离时按确认话术裁决并用 `handoff --record` 落盘。裁决为「改总纲」时停止本命令，改走 `/webnovel-outline-revise`。
 
 ### `/webnovel-chapter-reload [章号]`
 
@@ -105,6 +122,8 @@ python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" \
 ```
 
 正文 revision 变化会将后续已有规划、合同或正文的依赖标为 `previous_chapter_revision_changed`；系统不会自动改写下游文件。若重新提取的事实与旧 accepted commit 不一致而投影链无法安全撤销旧事实，提交会以 `revision_projection_unsafe` 阻断，并保留旧提交和新校验结果。
+
+**方向透传约束**：只能修改**最后一章**正文（节点 `chapter_to_body`）。CLI 在重载与裁决入口都会检查章号边界，非最后一章报 `handoff_target_locked` 并说明该章正文是既定事实；`--backup-only` 不受此限制。履约对账（`--reconcile`）解决的是**章内**节点偏离，层间方向另由第 4B 步的 `handoff --node chapter_to_body --check --target {chapter_num}` 处理；裁决为「改章纲」时停止本命令，改走 `/webnovel-chapter-revise {chapter_num}` 并按方向透传规则上溯到卷-章节点。
 
 履约对账未决时，`chapter-commit` 不会信任 artifact 自报的 `decision` 或 `confirmed_by`。先预览当前输入和偏离节点：
 
@@ -282,6 +301,53 @@ git switch main                             # 放弃这条线就切回原分支
 - **样本不足时明确不下结论**：占比结论需 ≥10 章，文体偏离结论需 ≥3 章（或一份可用的文风档案）；
   报告会把这些项列在「本次不下结论的项」里，**不要把空结论当成「一切正常」**
 - 伏笔逾期与钩子强度分布两项**尚未实现**（供数未接通，见 `references/index/skill-gap-assessment-2026-09-17.md` 附录 B）
+
+## 四层方向透传（CLI）
+
+总纲 → 卷纲 → 章纲 → 正文是一条单向链。任一层变化时都要检查与紧邻上下层是否同向；不同向时由作者裁决改哪一侧，裁决结果逐级上溯。统一规律：**每层只有「最后一个单位」可改，其余是既定事实**。
+
+| 节点 | 依据 → 产物 | 可改单元 | 既定事实 |
+|---|---|---|---|
+| `master_to_volume` | 总纲 → 卷纲 | 最后一卷 | 其余已规划卷 |
+| `volume_to_chapter` | 卷纲 → 章纲 | 最后一章 | 其余已规划章 |
+| `chapter_to_body` | 章纲 → 正文 | 最后一章正文 | 其余已有正文章 |
+
+```bash
+# 只看边界：可改单元 / 既定事实
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" handoff \
+  --node master_to_volume --format text
+
+# 一致性检查：采集两侧锚点，输出候选偏离与须裁决项
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" handoff \
+  --node volume_to_chapter --check --target 15 --format json
+
+# 预览裁决输入（不改任何文件）
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" handoff \
+  --node volume_to_chapter --target 15 --record --dry-run --format json
+
+# 记录作者裁决
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" handoff \
+  --node volume_to_chapter --target 15 --record \
+  --decision align_downstream --reason "{作者理由}" --impact 15 \
+  --expected-input "{input_token}" --format json
+```
+
+裁决三值与各节点的适用性：
+
+| 裁决 | 含义 | 说明 |
+|---|---|---|
+| `align_downstream` | 改下游产物以符合上游依据 | 落在产物层；章-正节点的旧值 `outline_to_body` 是它的别名 |
+| `align_upstream` | 改上游依据以符合下游产物 | 落在依据层，**须先上溯**到上一层节点；旧值 `body_to_outline` 是它的别名 |
+| `accepted_deviation` | 接受偏离，只记录 | 不改任何文件 |
+
+机器只给「锚点差集」作候选清单（总纲与卷纲是散文，无法机器判定方向），是否真的不一致由作者裁决。`--record` 只写 `.story-system/handoffs/`，不改任何创作文件；`input_token` 绑定当时的边界快照与上游来源，上游一改即失效。
+
+错误码：
+
+| 错误 | 含义 | 处理 |
+|---|---|---|
+| `handoff_target_locked` | 目标单位不在可改单元内 | 改走可改单元，或先上溯处理既定事实 |
+| `handoff_confirmation_required` | `input_token` 不匹配 | 重新 `--dry-run` 预览并让作者确认新 token |
 
 ## 统一 CLI（命令行使用）
 

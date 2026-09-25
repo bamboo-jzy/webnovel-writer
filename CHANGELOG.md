@@ -2,6 +2,34 @@
 
 这里记录每个正式版本对作者和维护者的影响。发布说明优先面向中文网文作者：先说写作体验有什么变化，再补维护者关心的技术细节。
 
+## v6.6.1 - 改了哪一层，系统就帮你检查哪几层
+
+发版范围：`v6.6.0..v6.6.1`。
+
+### 给作者看的变化
+
+- **四层方向透传**：总纲 → 卷纲 → 章纲 → 正文是一条单向链。任一层变化后，系统采集相邻两层的锚点做一致性检查，列出**候选偏离清单**（总-卷：卷号存在性与章节范围；卷-章：章节目标、涉及实体、伏笔；章-正：履约锚点）。
+- **机器只列候选，不替你拍板**：总纲和卷纲是散文，机器无法语义等价比对，只输出「差集 + 须你裁决的清单」。每个偏离三选一 —— 改产物（`align_downstream`）/ 改依据（`align_upstream`，系统会告诉你要上溯到哪一层哪个单位）/ 接受偏离（`accepted_deviation`，只记录不阻断）。裁决落盘 `.story-system/handoffs/`，不改正文、章纲或 commit；上游一改，旧结论立即失效。
+- **每层只允许改「最后一个单位」**：总-卷只改最后一卷、卷-章只改最后一章、章-正只改最后一章正文，其余是既定事实。最后一条是**代码级阻断**：`/webnovel-chapter-reload` 在非最后一章时报 `handoff_target_locked`（`--backup-only` 豁免）。
+- **卷纲不再能碰已落实的章节**：重写卷纲时章号被划成**锁定区**（已有章纲或正文）与**可改区**（尚无章纲），锁定区零改动并在报告里列出；`/webnovel-chapter-plan` 遇到已有章纲或正文的章一律跳过，不留「用户要求即可覆盖」的口子。
+- 顺手修掉 `/webnovel-write` 弃稿说明里残留的旧口径（`git switch -c rewrite-from-*`），并补「改完章纲想重新生成正文」的分流说明。
+
+### 是否需要改旧项目
+
+不需要。方向裁决记录写在 `.story-system/handoffs/`，旧项目不会凭空多出文件；它与 `reconciliations/`（章内履约对账）分工不同、互补不替代。卷纲重载新增的锁定区报告只是新增字段。
+
+### 给维护者
+
+- 新增 `data_modules/direction_handoff.py`（838 行）：三节点、`normalize_decision()` 别名归一、`describe_handoff_scope()` / `check_handoff()` / `record_handoff()` / `body_edit_boundary()`；`_upstream_target()` 把章号换算成所属卷号；`_binding_digest()` 生成绑定边界快照的 `input_token`。
+- 新增 `handoff` CLI 子命令（`webnovel.py` 的 `cmd_handoff()`），并登记进 `test_prompt_integrity.py` 的 `REGISTERED_CLI_SUBCOMMANDS`。
+- `chapter_reloading.py`：`reload_chapter_body()` / `reconcile_chapter_body()` 入口调 `body_edit_boundary()`，report 新增 `handoff_boundary`。
+- `volume_planning.py`：新增 `_chapter_fact_state()` / `describe_volume_scope()`，report 输出 `protected_chapters` / `open_chapters` / `scope_declaration`；`_range_for_chapters()` 单章不再出 `N-N`；报告分流指向 `chapter-plan`（有 open 章）或 `chapter-revise`（已锁死）。
+- 唯一话术源 `references/handoff/direction-handoff.md`（170 行），7 个 SKILL.md 引用不复写；volume-revise 的作用域拆为「卷粒度 / 章粒度」两层，chapter-reload 新增第 4B 步层间方向裁决。
+- 测试：新增 `test_direction_handoff.py`（24 例）；`test_prompt_integrity.py` 150 → 162；`test_volume_planning.py` +104；`fast.json` 5 个契约增补。`AUTHOR_REPORT_SKILLS` 锁死三段式编号，方向检查只能并入「二」段内。
+- skill 数仍 17；文档全量同步（两个 README、commands / overview / operations、两个 index）。
+
+注意一处**刻意收紧**：非最后一章的正文不再有重载入口（`handoff_target_locked`），要改只能从该章起整条尾巴回退重写。这是「每层只能改最后一个单位」的直接代价。
+
 ## v6.6.0 - 卷纲、章纲先和你讨论再生成
 
 发版范围：`v6.5.0..v6.6.0`。

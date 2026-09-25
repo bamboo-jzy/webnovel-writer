@@ -64,7 +64,7 @@ genre 从 `.webnovel/state.json` 的初始化配置快照读取。写作前必�
 第 12 章尚未完成章纲规划，请先运行 `/webnovel-chapter-plan 1 12`。
 ```
 
-章纲存在但晚于任一章级 Story System 合同时，也必须阻断；先让作者重新运行 `/webnovel-chapter-plan {volume_id} {chapter_num}` 刷新合同。若当前卷纲 revision 与章纲登记的 `source_volume_revision` 不一致，也必须阻断，先运行 `/webnovel-volume-reload {volume_id}`，再运行 `/webnovel-chapter-plan {volume_id} {chapter_num}`。不得从卷纲摘要、正文摘要或 `dynamic_context` 自由猜测本章目标，也不得使用 `{章纲目标}`、`第N章章纲目标` 等占位 query。
+章纲存在但晚于任一章级 Story System 合同时，也必须阻断；先让作者重新运行 `/webnovel-chapter-plan {volume_id} {chapter_num}` 刷新合同。若当前卷纲 revision 与章纲登记的 `source_volume_revision` 不一致，也必须阻断，按锁定区分流：该章已有章纲时卷纲修改不得改写它，合同与 revision 重登记走 `/webnovel-chapter-revise {chapter_num}`；只有尚无章纲的章才运行 `/webnovel-volume-reload {volume_id}` 后接 `/webnovel-chapter-plan {volume_id} {chapter_num}`。不得从卷纲摘要、正文摘要或 `dynamic_context` 自由猜测本章目标，也不得使用 `{章纲目标}`、`第N章章纲目标` 等占位 query。
 
 从真实章纲执行字段解析 `CHAPTER_GOAL` 后，才允许运行：
 
@@ -377,7 +377,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" use
 
 - **正文还是草稿（本章未 accepted）**：先用 `/webnovel-chapter-revise {chapter_num}` 改章纲并**刷新章级合同**——只改章纲不刷合同会让 phase 落到 `plan_in_progress`，prewrite gate 报 `chapter_contract_stale`——再跑本流程；`run-ledger write-resume` 会因章纲晚于正文给出 `outline_newer_than_draft` 确认项，选「重新起草」即重新生成正文（先备份、重新登记输入，不复用旧审查结果）。
 - **本章已 accepted**：**不能直接重跑**。`chapter_committed` 不在写前允许的 phase 里，prewrite gate 恒报 `phase_not_ready_for_prewrite`，与是否刷新合同无关；必须先用 `/webnovel-chapter-discard {chapter_num}` 把这章回退掉（**回退会整树还原，所以先回退、再改章纲**，否则章纲改动会被一起回退），然后改章纲、再写。
-- 本章后面还有已提交的章时，discard 会被 `downstream_chapters_exist` 阻断；此时没有「只重生成某一章正文」的入口，只能人工改写正文后走 `/webnovel-chapter-reload {chapter_num}`，或从这一章起整条尾巴回退重写。
+- 本章后面还有已提交的章时，discard 会被 `downstream_chapters_exist` 阻断，`/webnovel-chapter-reload {chapter_num}` 也会被方向透传的「章-正」末端约束以 `handoff_target_locked` 阻断（只允许重载最后一章正文）。此时**没有「只改某一章正文」的入口**，唯一通道是从这一章起整条尾巴按章序回退重写，或走 `/webnovel-chapter-discard {chapter_num}` 再依次补写。不要试图绕过阻断：直接改写正文文件而不重载会让 revision 与正文不一致，后续校验与提交都会报错。
 
 ## 作者友好最终报告契约
 

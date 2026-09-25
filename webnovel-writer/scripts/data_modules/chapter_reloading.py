@@ -565,6 +565,19 @@ def reload_chapter_body(project_root: str | Path, chapter: int, *, source: str =
     root = Path(project_root).resolve()
     report = {"ok": False, "chapter": chapter, "action": "backup" if backup_only else "reload", "dry_run": dry_run}
     try:
+        if not backup_only:
+            from .direction_handoff import body_edit_boundary
+
+            boundary = body_edit_boundary(root, chapter)
+            report["handoff_boundary"] = {
+                "last_chapter": boundary["last_chapter"],
+                "existing_chapters": boundary["existing_chapters"],
+            }
+            if not boundary["allowed"]:
+                blocker = boundary["blocker"]
+                raise ValueError(
+                    f"{blocker['code']}: {blocker['message']} {blocker['manual_channel']}"
+                )
         state = read_object(root / ".webnovel/state.json")
         path, data = chapter_body(root, chapter)
         revision = hashlib.sha256(data).hexdigest()
@@ -709,6 +722,18 @@ def reconcile_chapter_body(
     root = Path(project_root).resolve()
     report = {"ok": False, "action": "reconcile", "chapter": chapter, "dry_run": dry_run}
     try:
+        from .direction_handoff import body_edit_boundary
+
+        boundary = body_edit_boundary(root, chapter)
+        report["handoff_boundary"] = {
+            "last_chapter": boundary["last_chapter"],
+            "existing_chapters": boundary["existing_chapters"],
+        }
+        if not boundary["allowed"]:
+            blocker = boundary["blocker"]
+            raise ValueError(
+                f"{blocker['code']}: {blocker['message']} {blocker['manual_channel']}"
+            )
         artifacts = validate_commit_artifact_files(**artifact_paths(root))
         if any(item["type"] != ERROR_MISSED_OUTLINE_NODE for item in artifacts["errors"]):
             raise ValueError("reconciliation blocked: repair schema/review/disambiguation first")

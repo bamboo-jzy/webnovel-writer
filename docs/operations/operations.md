@@ -367,6 +367,30 @@ git commit -m "Discard chapter 10: restore to ch0009"   # 在当前分支追加�
 
 `git read-tree -u --reset` 只改工作树与索引（未跟踪文件保留），不移动分支指针、不新建分支、不删除提交：被抛弃的提交会成为新提交的父提交，`ch0010` tag 也仍指向它。插件走的是同一条路，只是把归档、提交和核对都代劳了。
 
+### 方向透传裁决记录
+
+四层链路（总纲 → 卷纲 → 章纲 → 正文）的方向检查由 `handoff` 子命令承载。裁决记录写在 `.story-system/handoffs/<decision_id>.json`，**只增不改**，不改任何创作文件：
+
+```bash
+python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" --project-root "${PROJECT_ROOT}" \
+  handoff --node master_to_volume --target 1 --check --format json
+python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" --project-root "${PROJECT_ROOT}" \
+  handoff --node master_to_volume --target 1 --record --decision align_downstream \
+  --reason "以总纲为准修正卷纲章节范围" --impact 1 --expected-input "{input_token}" --format json
+```
+
+| 项 | 说明 |
+|---|---|
+| 节点 | `master_to_volume`（总纲→卷纲）/ `volume_to_chapter`（卷纲→章纲）/ `chapter_to_body`（章纲→正文） |
+| 可改单元 | 每层只有「最后一个单位」；其余是既定事实 |
+| 裁决值 | `align_downstream` / `align_upstream` / `accepted_deviation`（章级旧值 `outline_to_body`、`body_to_outline` 自动归一） |
+| `input_token` | 绑定当时的边界快照与上游来源；上游一改即失效，须重新 `--dry-run` 预览 |
+| 错误码 | `handoff_target_locked`（目标不在可改单元内）/ `handoff_confirmation_required`（token 不匹配） |
+
+与 `.story-system/reconciliations/` 的分工：`reconciliations` 是**章内**履约对账（哪个 CBN/CPN 节点没写到位），由 `chapter-reload --reconcile` 写入；`handoffs` 是**层间**方向裁决（章纲与正文整体是否同向，或卷纲与总纲、章纲与卷纲）。两者互补，不互相替代。
+
+章-正节点还有代码级末端约束：`chapter-reload` 的重载与裁决入口在目标章不是最后一章时以 `handoff_target_locked` 阻断，`--backup-only` 豁免；尚无正文的章属首次写作，不受该边界约束。定向透视可跑 `handoff --node chapter_to_body`（不给 `--target`）看当前可改单元与既定事实清单。
+
 `chNNNN` 的语义是"第 N 章**完成后**已备份的状态"（`backup --chapter N` 在 `/webnovel-write` Step 6 执行），所以抛弃第 N 章要回到 `ch{N-1}`。回到 `chNNNN` 只会把这一章原样留着——这是最容易踩的一步。
 
 原地回退之后工作树逐项回到第 N-1 章完成时：

@@ -58,7 +58,7 @@ REGISTERED_CLI_SUBCOMMANDS = {
     "init", "extract-context", "memory-contract", "project-memory", "review-pipeline",
     "placeholder-scan", "master-outline-sync", "volume-reload", "chapter-reload",
     "story-system", "chapter-commit", "story-events", "knowledge",
-    "scope-audit", "style-profile", "chapter-discard",
+    "scope-audit", "style-profile", "chapter-discard", "handoff",
 }
 
 
@@ -863,6 +863,69 @@ def test_chapter_plan_skill_covers_batch_dialogue_gate():
     assert not card_name.endswith("大纲.md"), "决策卡命名会被卷级大纲发现模式 第*卷*大纲.md 误判"
 
 
+def test_volume_revise_skill_locks_existing_outlines_and_bodies():
+    """卷纲红线：已被章纲落实的卷级内容是既定事实，只演进尚无章纲覆盖的部分。
+
+    正文经由章纲与卷纲关联，章纲锁定即意味着正文同样不动——因此卷纲修改
+    既不得改写章纲，也不得借 stale 标记或下游建议间接改写正文。
+    """
+    text = _read_text(SKILLS_DIR / "webnovel-volume-revise" / "SKILL.md")
+    for required in (
+        "作用域与内容边界",
+        "锁定区",
+        "可改区",
+        "敏感区",
+        "尚无章纲覆盖",
+        "章纲锁定即意味着正文同样不动",
+        "不得写入 `大纲/第{章}章-*.md`、`正文/**`、`.story-system/commits/**`",
+        "不得对整个 `stale_chapters` 范围笼统建议",
+        "作用域声明",
+    ):
+        assert required in text, f"webnovel-volume-revise: 缺少既定事实锁定约定 {required}"
+
+
+def test_chapter_plan_skill_never_regenerates_existing_outlines():
+    """章纲红线：已有章纲或正文的章一律跳过，不留「用户要求即可覆盖」的口子。
+
+    该口子会让锁定区从下游被绕过——卷纲改不动的内容，却能靠重跑 chapter-plan 变相改写。
+    """
+    text = _read_text(SKILLS_DIR / "webnovel-chapter-plan" / "SKILL.md")
+    for required in (
+        "已有章纲或正文的章一律不生成、不覆盖",
+        "不存在「用户要求即可覆盖」的例外",
+        "既定事实检查",
+        "webnovel-chapter-revise",
+    ):
+        assert required in text, f"webnovel-chapter-plan: 缺少既定事实保护约定 {required}"
+    for forbidden in ("除非用户明确要求覆盖", "不得自动覆盖"):
+        assert forbidden not in text, f"webnovel-chapter-plan: 仍保留可被误读的覆盖口子 {forbidden}"
+
+
+def test_volume_reload_skill_never_touches_outlines_and_bodies():
+    """卷纲重载红线：人工改卷纲后重载，已存在章纲与正文零改动，下游按锁定区分流。"""
+    text = _read_text(SKILLS_DIR / "webnovel-volume-reload" / "SKILL.md")
+    for required in (
+        "不修改已存在的章纲与正文",
+        "protected_chapters",
+        "open_chapters",
+        "零动作",
+        "webnovel-chapter-revise",
+        "不写入 `大纲/第{章}章-*.md`、`正文/**`、`.story-system/commits/**`",
+        "不得把锁定章塞进",
+    ):
+        assert required in text, f"webnovel-volume-reload: 缺少既定事实保护约定 {required}"
+
+
+def test_write_skill_routes_stale_volume_to_chapter_revise():
+    """写前门禁遇到卷纲 revision 过期时，已有章纲的章只能走 chapter-revise。
+
+    旧口径让作者重跑 chapter-plan 刷合同，等于用下游动作改写锁定区章纲。
+    """
+    text = _read_text(SKILLS_DIR / "webnovel-write" / "SKILL.md")
+    assert "source_volume_revision" in text
+    assert "webnovel-chapter-revise" in text, "webnovel-write: 卷纲过期未按锁定区分流"
+
+
 def test_chapter_revise_shares_dialogue_confirm_loop():
     """章纲修改与卷纲修改共用同一套确认话术：确认轮无上限且每轮带「不再讨论」。"""
     text = _read_text(SKILLS_DIR / "webnovel-chapter-revise" / "SKILL.md")
@@ -945,3 +1008,105 @@ def test_reviewer_has_no_react_meta_narrative():
     text = _read_text(AGENTS_DIR / "reviewer.md")
     assert "ReAct" not in text, "reviewer 不应出现 ReAct 字样"
     assert "思维链" not in text, "reviewer 不应保留思维链元叙述"
+
+
+# ---------------------------------------------------------------------------
+# 四层方向透传（总纲 → 卷纲 → 章纲 → 正文）
+# ---------------------------------------------------------------------------
+
+HANDOFF_REFERENCE = "references/handoff/direction-handoff.md"
+HANDOFF_SKILLS = (
+    "webnovel-plan",
+    "webnovel-chapter-plan",
+    "webnovel-outline-revise",
+    "webnovel-volume-revise",
+    "webnovel-volume-reload",
+    "webnovel-chapter-revise",
+    "webnovel-chapter-reload",
+)
+
+
+def test_handoff_reference_document_exists_and_defines_three_nodes():
+    """方向透传的唯一话术源必须存在，且覆盖三个节点与统一三值裁决。"""
+    path = PLUGIN_ROOT / HANDOFF_REFERENCE
+    assert path.is_file(), f"缺方向透传统一参考文档 {HANDOFF_REFERENCE}"
+    text = _read_text(path)
+    for required in (
+        "总纲 → 卷纲 → 章纲 → 正文",
+        "master_to_volume",
+        "volume_to_chapter",
+        "chapter_to_body",
+        "align_downstream",
+        "align_upstream",
+        "accepted_deviation",
+        "只允许改最后一卷的卷纲",
+        "只允许改最后一章的章纲",
+        "只允许改最后一章的正文",
+        "候选清单不是硬判定",
+        "不再讨论",
+    ):
+        assert required in text, f"{HANDOFF_REFERENCE}: 缺少方向透传约定 {required}"
+
+
+@pytest.mark.parametrize("skill_name", HANDOFF_SKILLS)
+def test_handoff_skills_reference_unified_document(skill_name: str):
+    """七个方向透传节点的 skill 都必须引用同一份参考文档，不得各自造话术。"""
+    text = _read_text(SKILLS_DIR / skill_name / "SKILL.md")
+
+    assert "方向透传" in text, f"{skill_name}: 缺少方向透传段"
+    assert "../../references/handoff/direction-handoff.md" in text, (
+        f"{skill_name}: 未引用统一参考文档 {HANDOFF_REFERENCE}"
+    )
+    assert "handoff" in text, f"{skill_name}: 未接入 handoff CLI"
+
+
+def test_handoff_skills_lock_last_unit_boundary():
+    """每个节点都必须写明「只能改最后一个单位」，并点名其余是既定事实。"""
+    expectations = {
+        "webnovel-plan": ("master_to_volume", "只允许生成**最后一卷**的卷纲"),
+        "webnovel-chapter-plan": ("volume_to_chapter", "最后一章"),
+        "webnovel-outline-revise": ("master_to_volume", "非最后一卷的卷纲是既定事实"),
+        "webnovel-volume-revise": ("master_to_volume", "只允许修改最后一卷的卷纲"),
+        "webnovel-volume-reload": ("master_to_volume", "只允许重载最后一卷的卷纲"),
+        "webnovel-chapter-revise": ("volume_to_chapter", "只允许修改最后一章的章纲"),
+        "webnovel-chapter-reload": ("chapter_to_body", "只能修改最后一章正文"),
+    }
+    for skill_name, (node, phrase) in expectations.items():
+        text = _read_text(SKILLS_DIR / skill_name / "SKILL.md")
+        assert node in text, f"{skill_name}: 未点名所属方向透传节点 {node}"
+        assert phrase in text, f"{skill_name}: 缺少可改单元边界表述「{phrase}」"
+
+
+def test_chapter_reload_enforces_last_chapter_body_boundary():
+    """章-正节点末端约束：正文只能改最后一章，由 CLI 以 handoff_target_locked 阻断。"""
+    skill_text = _read_text(SKILLS_DIR / "webnovel-chapter-reload" / "SKILL.md")
+    for required in (
+        "handoff_target_locked",
+        "chapter_to_body",
+        "层间方向裁决",
+        "align_upstream",
+        "webnovel-chapter-revise",
+    ):
+        assert required in skill_text, f"webnovel-chapter-reload: 缺少方向透传约定 {required}"
+
+    from data_modules.direction_handoff import body_edit_boundary  # noqa: PLC0415
+
+    assert callable(body_edit_boundary)
+
+
+def test_outline_revise_routes_non_final_volumes_as_locked():
+    """总纲是上溯终点：改总纲后只有最后一卷可改卷纲，非最后一卷只能对齐总纲。"""
+    text = _read_text(SKILLS_DIR / "webnovel-outline-revise" / "SKILL.md")
+
+    assert "上溯终点" in text
+    for required in (
+        "非最后一卷的卷纲是既定事实",
+        "只能调整总纲与之对齐",
+        "accepted_deviation",
+    ):
+        assert required in text, f"webnovel-outline-revise: 缺少方向透传分流约定 {required}"
+
+
+def test_handoff_cli_is_registered():
+    """handoff 子命令必须登记在 CLI 白名单里，否则 skill 提示词会被判为引用未注册命令。"""
+    assert "handoff" in REGISTERED_CLI_SUBCOMMANDS

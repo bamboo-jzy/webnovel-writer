@@ -5,7 +5,7 @@
 > 不登记普通项目数据读取，例如 `.webnovel/state.json`、`设定集/*.md`、`大纲/*.md`、`index.db`。
 > **「Reference」列永远是外部参考文件，不登记 SKILL.md 自身。**
 >
-> 覆盖度：**17/17 skill**（2026-09-21 复核，新增 `webnovel-chapter-discard`；2026-09-22 新增 `webnovel-plan` 规划对话 reference 与 `webnovel-volume-revise` 共享话术引用；同日再新增 `webnovel-chapter-plan` 章级对话 reference 与 `webnovel-chapter-revise` 共享话术引用）。维护方式：改任一 `SKILL.md` 的 reference 表后，必须回写本文件；取证脚本见 `.workbuddy/tmp/audit_reference_usage.py`。
+> 覆盖度：**17/17 skill**（2026-09-21 复核，新增 `webnovel-chapter-discard`；2026-09-22 新增 `webnovel-plan` 规划对话 reference 与 `webnovel-volume-revise` 共享话术引用；同日再新增 `webnovel-chapter-plan` 章级对话 reference 与 `webnovel-chapter-revise` 共享话术引用；2026-09-24 新增 `references/handoff/direction-handoff.md`，七个方向透传 skill 统一引用）。维护方式：改任一 `SKILL.md` 的 reference 表后，必须回写本文件；取证脚本见 `.workbuddy/tmp/audit_reference_usage.py`。
 
 ---
 
@@ -60,6 +60,20 @@
 
 > 七个靶心大文件（`references/genre-profiles.md`、`skills/webnovel-init/references/creativity/selling-points.md`、`references/reading-power-taxonomy.md`、`skills/webnovel-plan/references/outlining/chapter-planning.md`、`skills/webnovel-init/references/creativity/creativity-constraints.md`、`skills/webnovel-write/references/polish-guide.md`、`references/shared/cool-points-guide.md`）一律区段读，避免 init/plan/write 每跑全量吞入；短文件维持全文读。
 
+### 方向透传统一参考（总纲 → 卷纲 → 章纲 → 正文）
+
+三个方向透传节点（`master_to_volume` / `volume_to_chapter` / `chapter_to_body`）共用同一份参考文档。它是这七个 skill 的唯一话术源，短文全文读，不做区段拆分。检索口径见 `.workbuddy/tmp` 下的引用审计脚本。
+
+| Skill | 阶段 | 触发 | Reference | 读取方式 | 区段锚点（区段读时匹配此真实标题） |
+|-------|------|------|-----------|---------|-----------|
+| webnovel-plan | Step 1.5 | always（总-卷方向检查） | `references/handoff/direction-handoff.md` | 全文 | — |
+| webnovel-chapter-plan | 卷-章方向检查 | always | `references/handoff/direction-handoff.md` | 全文 | — |
+| webnovel-outline-revise | 修订前/后 | always（上溯终点） | `references/handoff/direction-handoff.md` | 全文 | — |
+| webnovel-volume-revise | Step 1 | always | `references/handoff/direction-handoff.md` | 全文 | — |
+| webnovel-volume-reload | 执行流程 | always | `references/handoff/direction-handoff.md` | 全文 | — |
+| webnovel-chapter-revise | Step 1 | always | `references/handoff/direction-handoff.md` | 全文 | — |
+| webnovel-chapter-reload | 4B | always | `references/handoff/direction-handoff.md` | 全文 | — |
+
 > **review 的边界**：`review` 只加载上表三个文件。它**不加载** `cool-points-guide.md` / `strand-weave-pattern.md`——review SKILL.md 明确不评分、不产出节奏爽点评分，这两个文件属于 `plan` / `chapter-plan` / `query` 的消费面（2026-09-17 修正：本表此前误登了这两条）。
 
 ## CSV 检索：直接调用 `reference_search.py`
@@ -102,15 +116,12 @@
 
 ## 无独立 reference 的 Skill
 
-以下 skill 只读写项目数据（`大纲/*.md`、`设定集/*.md`、`.webnovel/state.json`、`.story-system/*` 等），**不加载任何外部 md/template/CSV**：
+以下 skill 只读写项目数据（`大纲/*.md`、`设定集/*.md`、`.webnovel/state.json`、`.story-system/*` 等），**不加载任何外部 md/template/CSV**。
+
+> 2026-09-24 变更：`webnovel-outline-revise`、`webnovel-volume-revise`、`webnovel-volume-reload`、`webnovel-chapter-revise`、`webnovel-chapter-reload` 已接入方向透传，统一读取 `references/handoff/direction-handoff.md`，从本表移出（见上表新增小节）。
 
 | Skill | 说明 |
 |-------|------|
-| webnovel-outline-revise | 只改 `大纲/总纲.md` 与确认后的设定集增量；冻结线直接扫 `.story-system/commits/chapter_*.commit.json` |
-| webnovel-volume-revise | 只改三份卷级产物；唯一外部引用是 `webnovel-plan` 的规划对话话术模板（见上表，用于确认轮），无自己的 reference 目录 |
-| webnovel-volume-reload | 只校验并重算三份卷级产物的 revision |
-| webnovel-chapter-revise | 只改 `大纲/第N章-*.md`；唯一外部引用是 `webnovel-chapter-plan` 的章级规划对话话术模板（见上表 Step 1.5/1.6，用于确认轮），无自己的 reference 目录；合同刷新走 `story-system`（见上一节） |
-| webnovel-chapter-reload | 只重载人工正文并重新校验 artifacts；合同由 CLI 侧处理 |
 | webnovel-chapter-discard | 只跑 `chapter-discard` 的预览/草稿删除/原地回退；归档、`git read-tree -u --reset` 与追加提交都在 CLI 内完成，不加载独立 reference |
 | webnovel-dashboard | 只读面板启动流程，不加载独立 reference；核心校验接口是 `/api/story-runtime/health` 与 `/api/preflight` |
 | webnovel-learn | 只读 state 后追加 `.webnovel/project_memory.json` |

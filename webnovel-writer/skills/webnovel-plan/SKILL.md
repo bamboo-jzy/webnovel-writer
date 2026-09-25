@@ -19,6 +19,7 @@ argument-hint: "[卷号，如 1]"
 6. **先对话后生成**：Step 1.5-1.6 的规划对话闸门未通过，不落任何卷级产物，只保留决策卡。
 7. 规划对话**无轮次上限**，但每轮必须提供「不再讨论」选项；作者选择即结束对话。
 8. 决策卡是作者资产，只增量更新，禁止整文件重写。
+9. **方向透传（总-卷节点）**：生成卷纲前必须先检查本卷卷纲与总纲是否同向（依据：`${SKILL_ROOT}/../../references/handoff/direction-handoff.md`）。只允许生成**最后一卷**的卷纲，其余已规划卷是既定事实；不一致时与作者讨论，由作者决定是否修改总纲。判定为「改总纲」时必须先停止本 Skill，改走 `/webnovel-outline-revise`。
 
 ## 阻断条件
 
@@ -26,6 +27,8 @@ argument-hint: "[卷号，如 1]"
 - 总纲缺少卷名 / 章节范围 / 核心冲突 / 卷末高潮 → 阻断并请求用户补全。
 - 目标卷的三份卷级产物**均已存在且非空** → 阻断，指向 `/webnovel-volume-revise`，不静默覆盖作者内容；只有部分存在时视为上一次未完成的运行，仅补缺失产物。
 - 规划对话闸门未通过（决策卡未决项非 0、`BLOCKER` 未清零或未获作者确认）→ 阻断生成阶段。
+- 目标卷不在方向透传的可改单元内（非最后一卷）→ 阻断并指向 `/webnovel-volume-revise {volume}`，不静默覆盖。
+- 总-卷方向检查报出候选偏离，且作者未完成裁决（`handoff --record` 未落盘）→ 阻断生成阶段。
 - 发现设定冲突 → 标记 `BLOCKER`，等待用户裁决。
 - 卷级时间线出现无法解释的回跳 → 阻断当前卷。
 - 验证失败 → 只重做失败的卷级产物，不覆盖其他卷。
@@ -50,6 +53,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" pla
 
 | 触发 | 读取方式 | 文件 |
 |------|---------|------|
+| Step 1.5 方向检查 | 全文 | `${SKILL_ROOT}/../../references/handoff/direction-handoff.md` |
 | Step 1.5 | 全文 | `${SKILL_ROOT}/references/outlining/volume-dialogue.md` |
 | Step 1.6 | 区段 | `${SKILL_ROOT}/references/outlining/volume-dialogue.md`（`## 四、决策卡模板`、`## 五、闸门清单`） |
 | Step 4 | 全文 | `${SKILL_ROOT}/../../templates/output/大纲-卷节拍表.md` |
@@ -103,16 +107,35 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" kno
 python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" memory-contract get-open-loops
 ```
 
-### Step 1.5：规划对话
+### Step 1.5：方向检查与规划对话
 
-先读 `${SKILL_ROOT}/references/outlining/volume-dialogue.md`，按「每轮话术模板」与作者逐轮讨论 10 项必答议题。
+先读 `${SKILL_ROOT}/../../references/handoff/direction-handoff.md` 的「总-卷」节点口径与「确认话术」，
+再读 `${SKILL_ROOT}/references/outlining/volume-dialogue.md`，按「每轮话术模板」与作者逐轮讨论 10 项必答议题。
+
+**方向检查在对话之前做**（总-卷节点）：
+
+```bash
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" handoff \
+  --node master_to_volume --check --target {volume_id} --format json
+```
+
+- `target_allowed=false`（该卷不是最后一卷）→ 阻断并指向 `/webnovel-volume-revise {volume_id}`。
+- `candidates` 或 `manual_items` 非空 → 按 `direction-handoff.md` 的确认话术与作者逐项裁决，
+  结论用 `handoff --record` 落盘（`--node master_to_volume --target {volume_id}`）。
+- 裁决为 `align_downstream` → 本次生成的卷纲向总纲对齐，继续 Step 1.6。
+- 裁决为 `align_upstream` → **停止本 Skill**，先运行 `/webnovel-outline-revise` 修改总纲，再重跑本 Skill。
+- 裁决为 `accepted_deviation` → 记录后继续，但在决策卡中注明该偏离。
+
+方向检查结论并入 10 项议题的讨论记录，不额外落文件；裁决记录只写 `.story-system/handoffs/`。
+
+随后按「每轮话术模板」与作者逐轮讨论：
 
 - 每轮 3-5 个议题，先给建议、理由与风险，再给有限选项；每轮必须包含「不再讨论，结束对话」选项。
 - 无轮次上限；作者选择「不再讨论」即结束对话。
 - 每轮结束把结论增量写入 `大纲/第{volume_id}卷-规划讨论.md` 的对应条目与统计行，不整文件重写。
 - 作者答复与总纲 / 设定冲突时，当场记 `BLOCKER` 并请作者裁决。
 
-本步只写决策卡，不写设定集、总纲、卷级产物或 `.story-system/`。
+本步只写决策卡，不写设定集、总纲、卷级产物或 `.story-system/`（方向裁决记录除外）。
 
 ### Step 1.6：决策卡闸门
 
@@ -157,7 +180,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" mem
 
 ### Step 8：验证、保存并更新状态
 
-验证决策卡存在且 `状态` 为 `已确认`、未决项为 0；三个卷级产物均存在且非空，卷级时间线没有无法解释的回跳，新设定已写回，`BLOCKER=0`，详细大纲没有逐章执行字段或章级合同调用要求。
+验证决策卡存在且 `状态` 为 `已确认`、未决项为 0；三个卷级产物均存在且非空，卷级时间线没有无法解释的回跳，新设定已写回，`BLOCKER=0`，详细大纲没有逐章执行字段或章级合同调用要求。同时确认总-卷方向检查已有结论：候选偏离为空，或作者的裁决已用 `handoff --record` 落盘。
 
 验证通过后生成 `大纲/第{volume_id}卷-总纲写回.json`，只写明确列出的伏笔和开放环：
 
@@ -230,6 +253,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" use
 - ...
 
 二、过程中遇到的问题与异常耗时
+- 方向检查（总-卷）：可改单元 第 {volume_id} 卷 / 既定事实 第 {a}-{b} 卷 / 候选偏离 {逐条，无则写「无」} / 裁决 {align_downstream / align_upstream / accepted_deviation}。
 - 已自动处理：...
 - 建议确认：...
 - 必须处理：...

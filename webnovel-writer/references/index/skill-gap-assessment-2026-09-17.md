@@ -284,6 +284,36 @@ E1 / E2 / E3 / E5 / E6 已处置（见附录 A）。剩余：
 
 > **修订（v6.6.0，2026-09-22）**：上表两条已不反映当前实现——`git switch -c rewrite-from-*` 与 `rewrite-from-start` 分支方案已在 v6.6.0 撤销，改为**原地回退**（`git read-tree -u --reset <版本点>` + 当前分支追加「抛弃第 N 章」提交，不新建分支）；第 1 章仍回仓库初始提交，但不再另开分支。本附录保留 2026-09-21 当时的决策记录，**以 `skills/webnovel-chapter-discard/SKILL.md` 为准**。
 
+### A.8 卷纲修改的既定事实锁定（2026-09-24，非缺口推导）
+
+新规则：**卷纲修改不得改动既定事实**——卷纲只演进「尚无章纲覆盖」的部分，已被已存在章纲落实的内容不得修改；正文经由章纲与卷纲关联，章纲锁定即意味着正文同样不动。
+
+| 决策 | 理由 |
+|---|---|
+| 锁定区以**已存在章纲**为基准（非 accepted commit） | 章纲存在即代表卷级决策已落地到章级；即使正文未写，再改卷纲对应内容也会让二者失配 |
+| 锁定区 ⊇ 总纲「冻结线」 | `outline-revise` 冻结线 = 最新 accepted commit；已 accepted 的章必然已有章纲，反向不成立 → 卷纲可改区比总纲可修订区更窄 |
+| `chapter-plan` 删掉「除非用户明确要求覆盖」口子 | 该口子让锁定区可从下游绕过——卷纲改不动的内容，却能靠重跑 chapter-plan 变相改写 |
+| 跨章卷级要素划为**敏感区**（需逐项声明影响）而非直接锁定 | 卷末高潮、整卷倒计时、伏笔弧线无法按章号切分，一刀切锁定会让卷纲完全不可改 |
+| `volume-reload` 输出 `protected_chapters` / `open_chapters` / 作用域声明 | 可验证口径：报告必须自证「本次只写入卷级文件、锁定章未改」，并有逐字节 hash 测试兜底 |
+
+**落地证据**：`volume_planning.py` 的 `_chapter_fact_state()` / `describe_volume_scope()` 与 `format_volume_reload_report` 分流；`webnovel-volume-revise` / `webnovel-volume-reload` / `webnovel-chapter-plan` / `webnovel-write` 四个 SKILL.md；`test_volume_planning.py`（5→8）、`test_prompt_integrity.py`（146→150）；`fast.json` 的 `skill_chapter_plan_contract` 与 `skill_volume_revise_contract`。
+
+### A.9 四层方向透传（2026-09-24，非缺口推导）
+
+新规则：**总纲 → 卷纲 → 章纲 → 正文是一条单向链**，任一层变化时都要检查与紧邻上下层是否同向；不同向时由作者裁决改哪一侧，裁决逐级上溯，总纲是上溯终点。A.8 的「锁定区」只是本模型在总-卷节点的近似实现。
+
+| 决策 | 理由 |
+|---|---|
+| 统一规律：**每层只有「最后一个单位」可改** | 卷/章/正文三个节点的边界同构，用一条规律描述比三套独立规则更易守；`master_to_volume` 限最后一卷、`volume_to_chapter` 限最后一章、`chapter_to_body` 限最后一章正文 |
+| 裁决三值跨节点通用（`align_downstream` / `align_upstream` / `accepted_deviation`），不新增 4 个节点专用值 | 与章-正节点既有的 `outline_to_body` / `body_to_outline` 语义一一对应，旧值保留为别名；新增 7 值全链会让每层多一套枚举 |
+| **机器只给候选清单，不给硬判定** | 总纲与卷纲是散文，无法做语义等价比对；`check_handoff` 只输出「锚点差集」（总纲卷表 vs `volumes_planned`、章纲关键实体 vs 上游文本、`fulfillment_result` 偏离），散文层一律列为「须裁决项」 |
+| 上溯时 **target 单位要换算** | `volume_to_chapter` 的 target 是章号，上溯到 `master_to_volume` 时须换算成所属卷号；`next_steps` 负责给出正确命令 |
+| 章-正末端约束落在**代码**而非仅提示词 | `body_edit_boundary()` + `reload_chapter_body` / `reconcile_chapter_body` 的 `handoff_target_locked` 阻断；`--backup-only` 豁免，尚无正文的章属首次写作不受约束 |
+| 裁决记录写 `.story-system/handoffs/`，与 `reconciliations/` 分工 | `reconciliations` = 章内履约对账（哪个 CBN/CPN 没写到位）；`handoffs` = 层间方向（章纲与正文整体是否同向，卷纲与总纲、章纲与卷纲） |
+| 统一话术源：`references/handoff/direction-handoff.md` | 七个 skill 原本各自表述边界（volume-revise 说「锁定区」、outline-revise 说「冻结线」），统一到一份文档并加守护测试，避免再次漂移 |
+
+**落地证据**：新增 `direction_handoff.py`（`HANDOFF_NODES` / `HANDOFF_DECISIONS` / `describe_handoff_scope` / `check_handoff` / `record_handoff` / `body_edit_boundary`）；`webnovel.py` 注册 `handoff` 子命令；`chapter_reloading.py` 两处边界阻断；新增 `references/handoff/direction-handoff.md`；七个 SKILL.md（`plan` / `chapter-plan` / `outline-revise` / `volume-revise` / `volume-reload` / `chapter-revise` / `chapter-reload`）；新增 `test_direction_handoff.py`（24 条）、`test_prompt_integrity.py`（150→162）；`fast.json` 五个契约增补。
+
 ---
 
 ## 附录 B：B1 供数断点实测（2026-09-18）

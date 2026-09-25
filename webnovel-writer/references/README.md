@@ -13,6 +13,7 @@
 | `reading-power-taxonomy.md` | 追读力分类学 | skills 直接读取 |
 | `review-schema.md` | 审查输出格式定义 | `webnovel-review` 读取 |
 | `index/` | 元数据索引（loading-map、gap-register） | 人工参考 |
+| `handoff/` | 四层方向透传（总纲 → 卷纲 → 章纲 → 正文）的统一口径与话术 | 七个方向透传 skill 读取 |
 | `outlining/` | 大纲相关参考 | `webnovel-plan` 读取 |
 | `review/` | 审查相关参考 | `webnovel-review` 读取 |
 | `shared/` | 跨 skill 共享参考 | 多 skill 读取 |

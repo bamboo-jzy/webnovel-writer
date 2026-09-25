@@ -22,10 +22,13 @@
       "id": "skill_plan_contract",
       "type": "skill_contract",
       "skill": "webnovel-plan",
-      "description": "/webnovel-plan runs the volume planning dialogue and decision-card gate before producing volume-only planning artifacts.",
+      "description": "/webnovel-plan runs the volume planning dialogue and decision-card gate before producing volume-only planning artifacts, after a master-to-volume direction check that only the last volume may be planned.",
       "required": [
         "若发现总纲与设定冲突，先阻断",
         "先对话后生成",
+        "方向透传",
+        "master_to_volume",
+        "只允许生成**最后一卷**的卷纲",
         "大纲/第{volume_id}卷-规划讨论.md",
         "不再讨论",
         "不落任何卷级产物",
@@ -37,12 +40,16 @@
       "id": "skill_chapter_plan_contract",
       "type": "skill_contract",
       "skill": "webnovel-chapter-plan",
-      "description": "/webnovel-chapter-plan runs the per-batch chapter planning dialogue and decision-card gate before creating independent chapter outlines and refreshing chapter contracts.",
+      "description": "/webnovel-chapter-plan runs the per-batch chapter planning dialogue and decision-card gate before creating independent chapter outlines and refreshing chapter contracts; chapters that already have an outline or body are never regenerated, and the batch is direction-checked against its volume.",
       "required": [
         "先对话后生成",
+        "方向透传",
+        "volume_to_chapter",
         "大纲/第{volume_id}卷-章纲规划讨论.md",
         "不再讨论",
         "不落任何章级产物",
+        "已有章纲或正文的章一律不生成、不覆盖",
+        "webnovel-chapter-revise",
         "大纲/第N章-标题.md",
         "CBN",
         "CPNs",
@@ -56,13 +63,18 @@
       "id": "skill_volume_revise_contract",
       "type": "skill_contract",
       "skill": "webnovel-volume-revise",
-      "description": "/webnovel-volume-revise confirms impact before editing, shares the planning-dialogue option wording, and reloads the volume revision afterward.",
+      "description": "/webnovel-volume-revise confirms impact before editing, shares the planning-dialogue option wording, and reloads the volume revision afterward; existing chapter outlines and bodies are locked facts, and only the last volume may be revised.",
       "required": [
         "修改前先备份",
         "作者确认",
         "不再讨论",
         "volume-reload",
-        "不得自动覆盖独立章纲",
+        "作用域与内容边界",
+        "锁定区",
+        "章纲锁定即意味着正文同样不动",
+        "方向透传",
+        "master_to_volume",
+        "只允许修改最后一卷的卷纲",
         "stale"
       ]
     },
@@ -70,12 +82,15 @@
       "id": "volume_reload_contract",
       "type": "skill_contract",
       "skill": "webnovel-volume-reload",
-      "description": "Manual volume outline edits require explicit revision reload and stale propagation.",
+      "description": "Manual volume outline edits require explicit revision reload and stale propagation; only the last volume may be reloaded, and the reload records a master-to-volume direction check.",
       "required": [
         "--volume",
         "--dry-run",
         "--backup-only",
         "manual_reload",
+        "方向透传",
+        "master_to_volume",
+        "只允许重载最后一卷的卷纲",
         "stale"
       ]
     },
@@ -83,7 +98,7 @@
       "id": "skill_chapter_reload_contract",
       "type": "skill_contract",
       "skill": "webnovel-chapter-reload",
-      "description": "Manual body edits require revision-bound reload, validation, and explicit commit confirmation.",
+      "description": "Manual body edits require revision-bound reload, validation, and explicit commit confirmation; only the last chapter body may be edited, enforced by the chapter-to-body direction boundary.",
       "required": [
         "chapter-reload",
         "--dry-run",
@@ -92,7 +107,11 @@
         "revision_projection_unsafe",
         "expected-previous",
         "不覆盖人工正文",
-        "previous_chapter_revision_changed"
+        "previous_chapter_revision_changed",
+        "方向透传",
+        "chapter_to_body",
+        "只能修改最后一章正文",
+        "handoff_target_locked"
       ]
     },
     {

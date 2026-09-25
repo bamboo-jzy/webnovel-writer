@@ -25,11 +25,14 @@ argument-hint: "[章号] [修改诉求，可选]"
 4. 明确列出保留项、修改项和无法自动裁决项；确认轮**无上限**，每轮必须带「不再讨论，按当前已确认范围结束」选项；冲突时暂停并让作者选择保留、重做或停止。
 5. 章纲内容变化后，必须重新解析章纲字段并刷新该章 Story System 合同，再用 `update-state --chapter-planned` 重登记章纲 revision 与合同 revision；登记命令会自动重算，不得手工拼写 hash。
 6. 不修改卷节拍表、卷时间线、卷级详细大纲；发现章纲诉求与卷级规划冲突时，阻断并指向 `/webnovel-volume-revise`。
-7. 校验或合同刷新失败时保留修改前备份，不登记新的可信 revision；不得报告为完成。
+7. **只允许修改最后一章的章纲**（方向透传「卷-章」节点，依据 `${SKILL_ROOT}/../../references/handoff/direction-handoff.md`）：其余已规划章是既定事实，诉求一律阻断并说明；卷纲也必须与那些章的章纲保持同向。
+8. **方向检查必做**：写入前后都要确认新章纲与卷纲同向。报出候选偏离时按方向透传的确认话术与作者裁决，用 `handoff --record` 落盘；裁决为「改卷纲」时停止本 Skill，先过上一层节点检查 `handoff --node master_to_volume`，再由 `/webnovel-volume-revise {volume_id}` 修改卷纲。
+9. 校验或合同刷新失败时保留修改前备份，不登记新的可信 revision；不得报告为完成。
 
 ## 边界
 
 - 只处理**已存在的独立章纲**（`大纲/第N章-*.md`）。章纲不存在时停止，并指向 `/webnovel-chapter-plan {volume_id} {range}` 生成。
+- **只处理最后一章的章纲**。该章不是最后一章时停止，并说明它是既定事实；机器通道只支持最后一章。
 - 若该章正文已存在或已有 accepted commit，章纲修订**不**自动改动正文或 commit；完成后明确提示作者运行 `/webnovel-chapter-reload {chapter}` 走正文重载链。
 - 章纲修订只影响当前章，不批量修改其他章；影响后续章纲承接的，列入"建议确认"由作者决定是否另行修订。
 - 纯人工编辑章纲后，不需要运行本 Skill；下次写作前 `write-gate --stage prewrite` 会以 `chapter_contract_stale` 阻断，此时运行 `/webnovel-chapter-plan` 重刷合同，或用本 Skill 走完确认-刷新-登记闭环。
@@ -69,7 +72,18 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" pla
 - `chapter_revisions` 中该章是否已有正文 revision、是否已有 accepted commit。
 - 该章引用的关键实体、伏笔和倒计时状态。
 
-先运行写前门禁取当前快照，确认合同是否已过期：
+先做**章粒度边界与卷-章方向检查**（依据 `${SKILL_ROOT}/../../references/handoff/direction-handoff.md`）：
+
+```bash
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" handoff \
+  --node volume_to_chapter --check --target {chapter_num} --format json
+```
+
+- `target_allowed=false`（该章不是最后一章）→ 阻断，不修改任何文件。
+- `candidates` 非空（章纲「关键实体」在卷纲与决策卡中找不到依据、卷纲 revision 已过期等）→
+  记入 Step 2 的修改方案一并裁决；`manual_items` 是低置信提示，须上下文判断。
+
+再运行写前门禁取当前快照，确认合同是否已过期：
 
 ```bash
 python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" write-gate \
@@ -87,6 +101,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" wri
 - 影响文件：仅目标章纲文件；不得扩展到卷级文件或其他章纲。
 - 影响面：与上一章 CEN→本章 CBN、本章 CEN→下一章 CBN 的承接是否仍成立；章内时间是否仍不回跳；倒计时算术是否一致；伏笔是否与卷级规划一致。
 - 风险：设定冲突、伏笔提前/延后、正文与章纲偏离（若该章已有正文）。
+- 方向检查结论（卷-章，来自 Step 1）：候选偏离逐条、须裁决项，以及作者的裁决口径（`align_downstream` / `align_upstream` / `accepted_deviation`）。
 
 用有限选项向作者确认（话术与「不再讨论」语义沿用 `${SKILL_ROOT}/../webnovel-chapter-plan/references/outlining/chapter-dialogue.md` 的「每轮话术模板」）：
 
@@ -98,6 +113,24 @@ D. 不再讨论，按当前已确认范围结束
 ```
 
 如果作者没有明确选择，继续询问，不得自行写入。确认轮无上限；作者选择「不再讨论」即按当前已确认范围结束确认，未确认的改动一律不写入。若诉求与卷级规划冲突，停止并指向 `/webnovel-volume-revise {volume_id}`。
+
+方向检查报出的候选偏离须单独用同一套话术裁决，并在**写入前**落盘：
+
+```bash
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" handoff \
+  --node volume_to_chapter --target {chapter_num} --record \
+  --decision {align_downstream|align_upstream|accepted_deviation} \
+  --reason "{作者理由}" --impact {chapter_num} \
+  --expected-input "{input_token}" --format json
+```
+
+- `align_downstream` → 本章章纲向卷纲对齐，继续 Step 3。
+- `align_upstream` → **停止本 Skill**：先过上一层节点检查
+  `handoff --node master_to_volume --target {volume_id}`，再由 `/webnovel-volume-revise {volume_id}` 修改卷纲；
+  卷纲变化后须重跑 `/webnovel-volume-reload {volume_id}`，然后回到本 Skill 重做章纲。
+- `accepted_deviation` → 记录后继续，在报告中列为有意保留的偏离。
+
+`--record` 只写 `.story-system/handoffs/`，不改任何章纲、卷纲或正文；它不替代 Step 3 的备份与定向编辑。
 
 ## Step 3：确认后备份并定向修改
 
@@ -126,6 +159,15 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" bac
 - 不发生与设定集、总纲或卷级节拍冲突的能力、关系和事实跳变。
 
 校验失败时恢复备份或修正后重新校验；不得跳过校验直接刷新合同。
+
+校验通过后重跑一次方向检查，确认章纲与卷纲仍同向、且未新增候选偏离：
+
+```bash
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" handoff \
+  --node volume_to_chapter --check --target {chapter_num} --format json
+```
+
+新增候选偏离时按 Step 2 的话术重新裁决，不得带着未裁决的偏离进入 Step 5。
 
 ## Step 5：刷新章级 Story System 合同
 
@@ -199,6 +241,8 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" use
 - 修改了什么、保留了什么、备份在哪里、合同是否已刷新。
 
 二、影响与异常
+- 方向检查（卷-章）：可改单元 第 {chapter_num} 章 / 既定事实 第 {a}-{b} 章 / 候选偏离 {逐条，无则写「无」} / 裁决 {align_downstream / align_upstream / accepted_deviation}。
+- 上溯：{若裁决为 align_upstream，列出需先过的节点与命令}。
 - 已自动处理：章纲 revision、合同 revision、状态重登记。
 - 建议确认：相邻章承接、伏笔推进或正文偏离是否需作者另行处理。
 - 必须处理：若该章已有正文，需运行 /webnovel-chapter-reload {chapter}。

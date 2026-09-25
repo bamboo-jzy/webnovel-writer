@@ -14,6 +14,8 @@ argument-hint: "[章号]"
 - SHA-256 基于正文内容，不依赖 mtime。`draft_revision`、`validated_revision`、`committed_revision` 分别表示初稿、最近校验和最近提交；没有历史 hash 的旧章视为未验证，不能反推手改前原文。
 - 备份保存的是当前人工稿；旧正文只有已存在的历史备份才能恢复。
 - 重载成功不等于校验通过，校验通过不等于提交成功。
+- **只能修改最后一章正文**（方向透传「章-正」节点，依据 `${SKILL_ROOT}/../../references/handoff/direction-handoff.md`）：其余已有正文章是既定事实，重载/裁决诉求一律阻断。实现上由 CLI 的 `handoff_target_locked` 阻断，停止后不得绕过。
+- **方向检查必做**：正文与章纲必须同向。报出候选偏离时按方向透传的确认话术与作者裁决，用 `handoff --node chapter_to_body --record` 落盘；裁决为「改章纲」时先停止本 Skill，改走 `/webnovel-chapter-revise {chapter_num}`，并按方向透传规则上溯到卷-章节点。
 - 四份 artifacts 必须来自同一个 `validation_input`。不得给旧结果补盖当前 hash 或 validation_id；任何输入变化均需重载并重跑 reviewer/data-agent。
 - 已 accepted 章的旧事实不能直接覆盖。只有重新提取的完整 extraction（除 source 外）与旧版完全相同、旧投影完成且作者确认时，才支持保留历史后复用投影。出现 `revision_projection_unsafe` 必须停下默认流程、请作者裁决：默认拒绝是**刻意的**（增量投影撤不掉旧事实），唯一合法通道是作者显式授权 `--allow-fact-revision`，由系统先撤回该章派生读模型（index 行 / 向量分块 / `story_events` 镜像）再整章重建；不得通过普通 retry/replay、改状态或删除旧 commit 绕过。
 
@@ -21,6 +23,7 @@ argument-hint: "[章号]"
 
 ```bash
 export WORKSPACE_ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
+export SKILL_ROOT="${CLAUDE_PLUGIN_ROOT}/skills/webnovel-chapter-reload"
 export SCRIPTS_DIR="${CLAUDE_PLUGIN_ROOT:?}/scripts"
 export PROJECT_ROOT="$(python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${WORKSPACE_ROOT}" where)"
 
@@ -87,6 +90,35 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" cha
 
 这一步只记录独立裁决，不修改正文或章纲；输入、artifact 或 revision 变化后 token 立即失效，必须重新预览。未完成裁决时保持 `needs_reconcile` / `blocked`，不能进入 accepted commit。
 
+## 4B. 层间方向裁决（章-正）
+
+4A 处理的是**章内**履约对账（具体到哪个节点没写到位）；4B 处理的是**层间方向**——这一章正文整体是否仍与章纲同向。两者互补，不互相替代。
+
+```bash
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" handoff \
+  --node chapter_to_body --check --target {chapter_num} --format json
+```
+
+- `target_allowed=false` → 该章不是最后一章，阻断（CLI 在 Step 2 已拦截）。
+- `candidates` 非空（`fulfillment_deviation`：正文对章纲节点的履约状态为 `missed` / `partial` / `contradicted` / `not_applicable`）→
+  与作者逐项裁决后落盘：
+
+```bash
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" handoff \
+  --node chapter_to_body --target {chapter_num} --record \
+  --decision {align_downstream|align_upstream|accepted_deviation} \
+  --reason "{作者理由}" --impact {chapter_num} \
+  --expected-input "{input_token}" --format json
+```
+
+- `align_downstream` → 按章纲修正文（作者改写后重新重载），继续 Step 5。
+- `align_upstream` → **停止本 Skill**：先过上一层节点检查
+  `handoff --node volume_to_chapter --target {chapter_num}`，再由 `/webnovel-chapter-revise {chapter_num}` 修改章纲；
+  章纲变化后按方向透传规则继续上溯到卷-章节点。
+- `accepted_deviation` → 记录后继续；这与 4A 的 `accepted_deviation` 是同一语义的两层落点。
+
+`handoff --record` 只写 `.story-system/handoffs/`，不改正文、章纲或 commit；它不替代 4A 的 `chapter-reload --reconcile`。
+
 ## 5. 作者确认后提交
 
 展示新旧 extraction 差异、下游影响和当前校验结论，使用 `AskUserQuestion` 确认提交或仅保留校验结果。不得因用户同意重载就推断同意提交。
@@ -126,3 +158,14 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" cha
 ## 收尾
 
 报告正文路径、备份路径、校验状态、是否实际提交、history 和尚未处理的下游章节，不输出 traceback 或长日志。下游 `previous_chapter_revision_changed` 必须按章顺序核对章纲/合同；已有正文先运行本 Skill，不能自动改写。下游无正文时须先核对并重新登记章纲合同。校验完成不能自动消除下游 stale。
+
+报告必须包含方向透传结论：
+
+```text
+方向检查（章-正）
+- 可改单元：第 {chapter_num} 章（最后一章正文）。
+- 既定事实：第 {a}-{b} 章正文（本次未修改）。
+- 机器候选偏离：{逐条，无则写「无」}。
+- 裁决结果：{align_downstream / align_upstream / accepted_deviation}。
+- 上溯：{若裁决为 align_upstream，列出需先过的节点与命令}。
+```

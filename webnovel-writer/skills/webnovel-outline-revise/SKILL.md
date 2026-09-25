@@ -32,14 +32,40 @@ argument-hint: "[修改诉求，可选]"
 2. 先把诉求分类并做冲突扫描，再输出保留项/修改项/影响卷范围；作者确认后才能写入，不得先改文件再询问。
 3. 总纲已有非空内容是作者资产，只能定向编辑，禁止整文件重写或静默覆盖人工内容。
 4. **推翻已发布事实型诉求只做阻断提示**：列出具体冲突点，给出两条出路（揭示式翻案登记为伏笔 / 增补填白），但不替作者改写，也不允许按普通修订流程写入。若作者坚持真正推翻已发布正文，明确告知这超出本 Skill 范围——那是重写已发布内容的人工工程。
-5. 修改总纲后，必须把受影响卷的 `volumes_planned` 标记为 stale，并在报告中指向 `/webnovel-volume-revise` 逐卷处理。
+5. 修改总纲后，必须把受影响卷的 `volumes_planned` 标记为 stale，并在报告中按**方向透传「总-卷」节点**（依据 `${SKILL_ROOT}/../../references/handoff/direction-handoff.md`）分流：只有**最后一卷**可指向 `/webnovel-volume-revise`；非最后一卷的卷纲是既定事实，不得修改，只能调整总纲与之对齐，或登记 `accepted_deviation`。
 6. 校验失败时保留修改前备份，不登记 stale；不得报告为完成。
 
 ## 边界
 
-- 只修改 `大纲/总纲.md` 及作者明确确认的设定集增量写回；不修改任何卷级文件、章纲、正文或 `.story-system/`。
+- 只修改 `大纲/总纲.md` 及作者明确确认的设定集增量写回；不修改任何卷级文件、章纲、正文或 `.story-system/`（方向裁决记录 `.story-system/handoffs/` 除外）。
 - 揭示式翻案只**登记为伏笔/开放环**（写入设定或伏笔清单，供后续卷揭示），不在本 Skill 内生成反转节拍正文。
 - 冻结线内已发布正文与新总纲之间无害的细节偏差，可登记为 accepted deviation 关闭，不逼作者逐条处理。
+
+## 方向透传：总-卷节点（本 Skill 是上溯终点）
+
+总纲是四层（总纲 → 卷纲 → 章纲 → 正文）的最上层，也是方向透传上溯的**终点**：本 Skill 之下没有更上层的依据。完整口径见 `${SKILL_ROOT}/../../references/handoff/direction-handoff.md`。
+
+### 修订前：先看既定事实
+
+总纲必须与**非最后一卷**的既有卷纲保持同向——那些卷纲是既定事实，不能为了配合总纲改动而被改写。
+
+```bash
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" handoff \
+  --node master_to_volume --format text
+```
+
+输出里的 `editable_units`（最后一卷）与 `locked_units`（其余已规划卷）就是本次可影响的边界。
+
+### 修订后：按卷分流
+
+| 受影响卷 | 处理 |
+|---|---|
+| 最后一卷 | 可改卷纲 → `/webnovel-volume-revise {volume_id}`（若涉及重写正文，按方向透传的顺序约束执行） |
+| 非最后一卷 | **卷纲锁定**，不得指向 `/webnovel-volume-revise` → 只能把总纲调回与该卷卷纲同向，或登记 `accepted_deviation` |
+
+对非最后一卷报出冲突时，与作者确认是「总纲改动超出既有卷纲范围」并要求调整总纲，不得承诺修改卷纲。
+
+与卷纲/章纲/正文三个节点不同，总纲没有 revision 字段，`handoff --node master_to_volume --check --target {volume_id}` 只能比对卷号存在性与章节范围；卷名、核心冲突、卷末高潮是散文表述，一律须作者裁决。
 
 ## 环境准备
 
@@ -173,14 +199,20 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" pla
 一、修改与文件
 - 修改了什么、保留了什么、备份在哪里、冻结线是第几章。
 
-二、影响与异常
+二、方向检查（总-卷）
+- 可改单元：第 {v} 卷（最后一卷）。
+- 既定事实：第 {a}-{b} 卷（本次未修改，其卷纲不得改写）。
+- 受影响卷分流：第 {v} 卷 → /webnovel-volume-revise {v}；第 {a}-{b} 卷 → 卷纲锁定，只能调整总纲与之对齐或登记 accepted_deviation。
+
+三、影响与异常
 - 诉求分类结果（纯未来型/设定增补型/推翻型的处理结论）。
 - 已自动处理：备份、受影响卷 stale 登记。
 - 建议确认：揭示式翻案伏笔、accepted deviation、设定写回。
 - 必须处理：需重新规划的卷范围。
 
-三、下一步建议
-- /webnovel-volume-revise {volume_id}（逐卷处理受影响卷）
+四、下一步建议
+- 最后一卷：/webnovel-volume-revise {volume_id}
+- 非最后一卷：不改卷纲；如需一致，请调整总纲或登记 accepted_deviation
 ```
 
 故障排查只提示 `.webnovel/logs/run_last.log` 或 `/webnovel-doctor`。

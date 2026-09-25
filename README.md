@@ -1,7 +1,7 @@
 # Webnovel Writer
 
 [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-6.6.0-brightgreen.svg)](.claude-plugin/marketplace.json)
+[![Version](https://img.shields.io/badge/version-6.6.1-brightgreen.svg)](.claude-plugin/marketplace.json)
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-Compatible-purple.svg)](https://claude.ai/claude-code)
 [![Marketplace](https://img.shields.io/badge/Claude%20Code-Marketplace-black.svg)](.claude-plugin/marketplace.json)
@@ -58,14 +58,14 @@ Webnovel Writer 用业余时间维护。如果它帮你省下了梳理设定、�
 | 能力 | 命令 | 说明 |
 |------|------|------|
 | 深度初始化 | `/webnovel-init` | 分阶段问答，帮你把书的骨架、设定集、总纲和初始状态搭起来 |
-| 总纲修改 | `/webnovel-outline-revise` | 以已发布章节为冻结线，确认式修改总纲；推翻已发布事实的诉求只阻断提示 |
-| 卷纲规划 | `/webnovel-plan` | 先与你逐轮讨论卷级决策并落盘决策卡，通过闸门后再生成卷级节拍表、时间线和纯卷纲，并写回新增设定 |
-| 卷纲修改 | `/webnovel-volume-revise` | 先分析并确认影响，再定向修改卷纲、备份并刷新 revision；确认轮可随时选择不再讨论 |
-| 卷纲重载 | `/webnovel-volume-reload` | 人工编辑卷纲后重算 revision，并标记依赖章节为 stale |
-| 章纲规划 | `/webnovel-chapter-plan` | 按批次先讨论章级决策，再生成独立章纲，校验承接并刷新章级 Story System 合同 |
-| 章纲修改 | `/webnovel-chapter-revise` | 先分析并确认影响，再定向修改章纲、备份并刷新章级合同与 revision |
+| 总纲修改 | `/webnovel-outline-revise` | 以已发布章节为冻结线，确认式修改总纲；推翻已发布事实的诉求只阻断提示。**非最后一卷**的卷纲锁定，只能调整总纲与之对齐 |
+| 卷纲规划 | `/webnovel-plan` | 先与你逐轮讨论卷级决策并落盘决策卡，通过闸门后再生成卷级节拍表、时间线和纯卷纲，并写回新增设定。生成前必过总-卷方向检查 |
+| 卷纲修改 | `/webnovel-volume-revise` | 只演进尚无章纲覆盖的卷级内容；已被章纲落实的部分是既定事实，不改章纲也不改正文。**只允许修改最后一卷** |
+| 卷纲重载 | `/webnovel-volume-reload` | 人工编辑卷纲后重算 revision，标记依赖章节 stale；已存在的章纲与正文零改动。**只允许重载最后一卷** |
+| 章纲规划 | `/webnovel-chapter-plan` | 按批次先讨论章级决策，再生成独立章纲，校验承接并刷新章级合同；已有章纲或正文的章一律跳过。生成后复核卷-章方向 |
+| 章纲修改 | `/webnovel-chapter-revise` | 先分析并确认影响，再定向修改章纲、备份并刷新章级合同与 revision。**只允许修改最后一章** |
 | 章节创作 | `/webnovel-write` | 一条龙写完一章：备上下文、起草、审查、润色、记录事实、自动备份 |
-| 正文重载 | `/webnovel-chapter-reload` | 人工修改正文后按内容 revision 备份、重新校验 artifacts，并在确认后提交 |
+| 正文重载 | `/webnovel-chapter-reload` | 人工修改正文后按内容 revision 备份、重新校验 artifacts，并在确认后提交。**只能修改最后一章正文** |
 | 抛弃正文 | `/webnovel-chapter-discard` | 抛弃一章正文：未提交草稿归档后删除，已提交章原地回退到上一章版本点（不新建分支） |
 | 事实审查 | `/webnovel-review` | 章节事实一致性与逻辑审查：设定、时间线、叙事连贯、角色一致性与逻辑五维 |
 | 状态查询 | `/webnovel-query` | 查询角色、伏笔、节奏、实体关系和运行时信息 |
@@ -73,6 +73,27 @@ Webnovel Writer 用业余时间维护。如果它帮你省下了梳理设定、�
 | 文风学习 | `/webnovel-style-learn` | 从正文学现状、从 `文风/` 学目标，产出可复用的文风档案 |
 | 可视化面板 | `/webnovel-dashboard` | 只读浏览项目状态、实体图谱、章节内容和追读力数据 |
 | 项目体检 | `/webnovel-doctor` | 阶段感知检查目录、文件、数据库、RAG、依赖和 Dashboard 产物 |
+
+## 四层方向透传
+
+总纲 → 卷纲 → 章纲 → 正文在方向上是**一条链**：总纲指导卷纲，卷纲指导章纲，章纲指导正文。任一层变化时，必须检查它与紧邻上下层是否仍同向；不同向时由你裁决改哪一侧，裁决结果逐级上溯。
+
+统一规律：**每层只有「最后一个单位」可以改，其余是既定事实**。
+
+| 节点 | 依据 → 产物 | 可改单元 | 既定事实 |
+|---|---|---|---|
+| 总-卷 | 总纲 → 卷纲 | 最后一卷 | 其余已规划卷 |
+| 卷-章 | 卷纲 → 章纲 | 最后一章 | 其余已规划章 |
+| 章-正 | 章纲 → 正文 | 最后一章正文 | 其余已有正文章 |
+
+裁决只有三种口径：**改下游**（产物向依据对齐）、**改上游**（依据向产物对齐，须先上溯）、**接受偏离**（只记录）。查看当前边界（`handoff` 是 CLI 子命令，各 Skill 会在对应步骤自动调用）：
+
+```bash
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" handoff \
+  --node {master_to_volume|volume_to_chapter|chapter_to_body} --check --target {n} --format text
+```
+
+机器只给「锚点差集」作候选清单（总纲与卷纲是散文，无法机器判定方向）；是否真的不一致由你裁决。
 
 ## 系统长什么样
 
@@ -268,13 +289,13 @@ Git 不可用时 `backup` 退化为本地 `snapshot_chNNNN_*` 副本（带文件
 | 命令 | 示例 | 用途 |
 |------|------|------|
 | `/webnovel-init` | `/webnovel-init` | 初始化新书项目 |
-| `/webnovel-outline-revise` | `/webnovel-outline-revise 把结局改为大团圆` | 以冻结线为界确认式修改总纲 |
-| `/webnovel-plan` | `/webnovel-plan 1` | 先讨论卷级决策并过决策卡闸门，再生成第 1 卷的卷级节拍表、时间线和纯卷纲 |
-| `/webnovel-volume-revise` | `/webnovel-volume-revise 1` | 确认式引导修改第 1 卷卷纲 |
-| `/webnovel-volume-reload` | `/webnovel-volume-reload 1` | 人工编辑后重载卷纲 revision 并标记 stale |
-| `/webnovel-chapter-plan` | `/webnovel-chapter-plan 1 1-10` | 先讨论第 1 卷第 1-10 章的章级决策并过闸门，再生成独立章纲与章级合同 |
-| `/webnovel-chapter-revise` | `/webnovel-chapter-revise 15 把反派出场提前` | 确认式引导修改第 15 章章纲并刷新合同 |
-| `/webnovel-chapter-reload` | `/webnovel-chapter-reload 12` | 人工修改第 12 章后重载正文 revision、重新校验并确认提交 |
+| `/webnovel-outline-revise` | `/webnovel-outline-revise 把结局改为大团圆` | 以冻结线为界确认式修改总纲；非最后一卷的卷纲锁定 |
+| `/webnovel-plan` | `/webnovel-plan 1` | 先过总-卷方向检查并讨论卷级决策，再过决策卡闸门，生成第 1 卷的卷级节拍表、时间线和纯卷纲 |
+| `/webnovel-volume-revise` | `/webnovel-volume-revise 1` | 确认式引导修改第 1 卷卷纲（只允许最后一卷），只改尚无章纲覆盖的部分 |
+| `/webnovel-volume-reload` | `/webnovel-volume-reload 1` | 人工编辑后重载卷纲 revision（只允许最后一卷），标记 stale 并声明未改章纲与正文 |
+| `/webnovel-chapter-plan` | `/webnovel-chapter-plan 1 1-10` | 先讨论第 1 卷第 1-10 章的章级决策并过闸门，再生成独立章纲与章级合同，最后复核卷-章方向 |
+| `/webnovel-chapter-revise` | `/webnovel-chapter-revise 15 把反派出场提前` | 确认式引导修改第 15 章章纲（只允许最后一章）并刷新合同 |
+| `/webnovel-chapter-reload` | `/webnovel-chapter-reload 12` | 人工修改第 12 章后重载正文 revision（只能最后一章）、重新校验并确认提交 |
 | `/webnovel-chapter-discard` | `/webnovel-chapter-discard 12` | 抛弃第 12 章正文（草稿删除或原地版本点回退） |
 | `/webnovel-write` | `/webnovel-write 45` | 写作并提交指定章节 |
 | `/webnovel-review` | `/webnovel-review 1-5` | 审查章节范围 |
@@ -391,7 +412,8 @@ git push origin feature/your-feature
 
 | 版本 | 主要变化 |
 |------|----------|
-| **v6.6.0 (当前)** | 卷纲、章纲先和你讨论再生成，抛弃章节不再新建分支 |
+| **v6.6.1 (当前)** | 改了哪一层，系统就帮你检查哪几层（四层方向透传）；非最后一章正文不再可改稿 |
+| **v6.6.0** | 卷纲、章纲先和你讨论再生成，抛弃章节不再新建分支 |
 | **v6.5.0** | 最低 Python 版本提升到 3.12 |
 | **v6.4.0** | 一章不要了，直接抛弃 |
 | **v6.3.0** | 文风有档案，漏章藏不住，已定稿的事实也能改 |

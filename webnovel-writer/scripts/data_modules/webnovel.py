@@ -396,6 +396,34 @@ def cmd_volume_reload(args: argparse.Namespace) -> int:
     return 0 if report.get("ok") else 1
 
 
+def cmd_handoff(args: argparse.Namespace) -> int:
+    from .direction_handoff import (
+        check_handoff,
+        describe_handoff_scope,
+        format_handoff_report,
+        record_handoff,
+    )
+
+    root = _resolve_root(args.project_root)
+    if args.record:
+        report = record_handoff(
+            root,
+            args.node,
+            target=args.target,
+            decision=args.decision,
+            reason=args.reason,
+            impact=args.impact,
+            expected_input=args.expected_input,
+            dry_run=bool(args.dry_run),
+        )
+    elif args.check:
+        report = check_handoff(root, args.node, target=args.target)
+    else:
+        report = describe_handoff_scope(root, args.node, target=args.target)
+    print(format_handoff_report(report, args.format))
+    return 0 if report.get("ok") else 1
+
+
 def cmd_run_ledger(args: argparse.Namespace) -> int:
     from .run_ledger import (
         build_write_resume_plan,
@@ -615,6 +643,32 @@ def main() -> None:
     p_volume_reload.add_argument("--backup-only", action="store_true", help="只备份当前卷纲文件，不更新状态")
     p_volume_reload.add_argument("--format", choices=["json", "text"], default="text", help="输出格式")
     p_volume_reload.set_defaults(func=cmd_volume_reload)
+
+    p_handoff = sub.add_parser(
+        "handoff",
+        help="四层方向透传：总纲→卷纲→章纲→正文 的边界与一致性裁决",
+    )
+    p_handoff.add_argument(
+        "--node",
+        required=True,
+        choices=["master_to_volume", "volume_to_chapter", "chapter_to_body"],
+        help="方向透传节点",
+    )
+    p_handoff.add_argument("--target", type=int, default=0, help="目标卷号（总-卷）或章号（卷-章 / 章-正）")
+    p_handoff.add_argument("--check", action="store_true", help="采集两侧锚点并输出候选偏离（默认只输出作用域）")
+    p_handoff.add_argument("--record", action="store_true", help="预览或记录作者裁决，不修改任何创作文件")
+    p_handoff.add_argument(
+        "--decision",
+        choices=["align_downstream", "align_upstream", "accepted_deviation"],
+        default="",
+        help="裁决口径：改下游 / 改上游（需上溯）/ 接受偏离",
+    )
+    p_handoff.add_argument("--reason", default="")
+    p_handoff.add_argument("--impact", nargs="*", type=int, default=None, help="明确列出受影响单位；空列表也需传此参数")
+    p_handoff.add_argument("--expected-input", default="", help="作者确认的预览 input_token")
+    p_handoff.add_argument("--dry-run", action="store_true", help="只预览，不写入裁决记录")
+    p_handoff.add_argument("--format", choices=["json", "text"], default="text", help="输出格式")
+    p_handoff.set_defaults(func=cmd_handoff)
 
     p_run_ledger = sub.add_parser("run-ledger", help="记录或查询写章断点续跑状态")
     run_ledger_sub = p_run_ledger.add_subparsers(dest="ledger_action", required=True)

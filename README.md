@@ -14,33 +14,6 @@
 
 一句话定位：这是一套面向长篇连载的一致性系统，不是写完就忘的一次性生成器。
 
-> **版本导览（2026-08-19 更新）**
->
-> | 分支 | 版本 | 状态 |
-> |---|---|---|
-> | `master`（本分支） | v6 · Claude Code 插件 | 维护中（只修致命 bug），Claude Code 用户请用此版本 |
-> | `v7` | v7 · CLI 多宿主重写 | 已冻结，未发布，仅作开发档案 |
-> | `v8` | v8 · 基于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的写作工作台 | 开发中，下一代主线 |
->
-> 原 v7 设计公示（[Discussions #118](https://github.com/lingfengQAQ/webnovel-writer/discussions/118)）所征集的反馈仍是 v8 设计的重要输入；v7 的 CLI 形态经评估后不再发布，下一代改以 dsh 插件形态开发，设计文档随 v8 分支公开。
-
-## 赞助与支持
-
-<a href="https://www.infistar.cc/register?aff=YBE8GGRE&ref_source=link" target="_blank"><img src="docs/assets/sponsors/infistar-banner.png" alt="Infistar.cc 无限星河 · 一站式全球大模型 API 服务平台" width="728"/></a>
-
-**Webnovel Writer × Infistar.cc 无限星河｜全模型 API · 助力长篇网文持续创作**
-
-感谢 [Infistar.cc 无限星河](https://www.infistar.cc/register?aff=YBE8GGRE&ref_source=link) 赞助并为 Webnovel Writer 提供模型服务支持！
-
-- ⚡ **稳定支持长篇连续写作**：提供高可用模型通道与稳定响应，满足大纲规划、章节创作、内容审查、润色改写及长上下文写作等场景。
-- 🧠 **兼容 Claude Code 与主流模型**：支持 Claude、ChatGPT、Gemini、Kimi、GLM、DeepSeek 等模型，可灵活配置长篇写作、审查和辅助模型。
-- 📚 **助力记忆与知识库检索**：支持 Embedding、Rerank 等兼容 OpenAI 格式的接口，帮助角色设定、时间线、伏笔和章节内容持续沉淀，减少长篇创作中的遗忘与前后矛盾。
-- 🎁 **Webnovel Writer 用户专属福利**：通过 [专属推广链接](https://www.infistar.cc/register?aff=YBE8GGRE&ref_source=link) 注册并完成首次调用，即可领取 [5美元等值测试额度 / 首充专属优惠]，快速体验更稳定、更连贯的 AI 长篇创作流程！
-
-Webnovel Writer 用业余时间维护。如果它帮你省下了梳理设定、对齐伏笔的功夫，欢迎来信交流想法、反馈使用体验，或表达对项目的支持：
-
-📮 **ksdflisjdf@gmail.com**
-
 ## 为什么需要它
 
 长篇创作最难的不是写出第一章，而是写到第 80 章、第 200 章以后仍然保持：
@@ -188,7 +161,22 @@ RERANK_MODEL=jina-reranker-v3
 RERANK_API_KEY=your_rerank_api_key
 ```
 
-没填 Embedding Key 也能用——系统会自动退回 BM25 关键词检索，只是语义召回会弱一些。Embedding 和 Rerank 都可以换成任何兼容 OpenAI 格式的接口。
+这两组配置是检索链路上的两个环节，各管一件事：**Embedding 负责「找得到」，Rerank 负责「排得准」**。
+
+**Embedding：把文字变成可以「按意思」比较的向量**
+
+每章提交后，系统会把章节切成的片段交给 Embedding 模型编码成向量，写进书项目的 `index.db`；查询时再把你的问题编码成同一种向量，按距离找出语义相近的片段。有了它，问「主角的师父是谁」时，即使原文写的是「他的授业恩师」，也能被召回——这是关键词匹配做不到的。
+
+**Rerank：把候选清单重新排准**
+
+向量召回和 BM25 关键词召回会各自给出一批候选，先用 RRF 融合成一份清单，再交给 Rerank 模型把「问题 + 候选原文」放在一起逐条打分重排，最终只把最相关的一小撮（默认 10 条）注入写作上下文。它比衡量向量距离更贵、也更准，作用是压掉融合结果里那些「字面像、其实无关」的噪声。
+
+两条降级路径（都不会中断写作）：
+
+- **没填 `EMBED_API_KEY`**：不走向量检索，自动退回 BM25 关键词检索，只是语义召回会弱一些。
+- **Rerank 调用失败**：退回 RRF 融合后的顺序，检索整体仍然可用。
+
+Embedding 和 Rerank 都可以换成任何兼容 OpenAI 格式的接口。
 
 ### 5. 开始规划和写作
 
@@ -439,13 +427,11 @@ git push origin feature/your-feature
 
 本项目使用 [GPL v3](LICENSE) 协议。
 
-## Star 历史
-
-[![Star History Chart](https://api.star-history.com/svg?repos=lingfengQAQ/webnovel-writer&type=Date)](https://star-history.com/#lingfengQAQ/webnovel-writer&Date)
-
 ## 致谢
 
-本项目使用 Claude Code、Gemini CLI 与 Codex 配合 Vibe Coding 方式开发。
+本项目使用 Claude Code、WorkBuddy 开发。
+
+本项目继承的上游仓库：[lingfengQAQ/webnovel-writer](https://github.com/lingfengQAQ/webnovel-writer)（本仓库为面向 Claude Code 用户的 fork，安装指令指本仓库）。
 
 灵感来源：[Linux.do 帖子](https://linux.do/t/topic/1397944/49)
 

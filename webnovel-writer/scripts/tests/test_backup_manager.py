@@ -297,3 +297,96 @@ def test_list_backups_separates_current_and_archived_points(tmp_path, capsys):
     assert "ch0001" in output
     assert "历史点 ch0001-prev-" in output
     assert "1 个章节版本点，1 个历史点" in output
+
+
+# ---------------------------------------------------------------------------
+# 写前点（backup --prewrite）
+# ---------------------------------------------------------------------------
+
+def _prewrite_project(tmp_path):
+    assert _run_git(tmp_path, "init", "-b", "main").returncode == 0
+    _configure_git_identity(tmp_path)
+    chapter = tmp_path / "正文/第0001章.md"
+    chapter.parent.mkdir()
+    chapter.write_text("正文 v1", encoding="utf-8")
+    return GitBackupManager(str(tmp_path)), chapter
+
+
+def test_prewrite_point_uses_its_own_namespace(tmp_path):
+    """写前点 tag 不得被当成章节版本点：不进 verified_backup、不进 ch* 列表、不写 receipt。"""
+    manager, _ = _prewrite_project(tmp_path)
+
+    assert manager.prewrite_point(1, "开端") is True
+
+    tag = backup_manager.prewrite_point_tag(1)
+    assert tag == "pre-ch0001"
+    assert _run_git(tmp_path, "rev-parse", "--verify", f"refs/tags/{tag}").returncode == 0
+    # `ch*` glob 不覆盖 `pre-ch*`，因此版本点统计与归档解析都不会被污染
+    assert _run_git(tmp_path, "tag", "-l", "ch*").stdout.strip() == ""
+    # 写前点不是版本点：交付校验看不到它，也不会因为一章两次打点而覆盖 chNNNN
+    assert manager.verified_backup(1) == {}
+    assert not manager._backup_receipt_path().exists()
+    assert manager.prewrite_point_commit(1) == _run_git(tmp_path, "rev-parse", "HEAD").stdout.strip()
+
+
+def test_prewrite_point_moves_and_archives_previous_point(tmp_path):
+    """同章重写再打一次写前点时前移，旧点归档成 pre-chNNNN-prev-<时间戳>。"""
+    manager, chapter = _prewrite_project(tmp_path)
+    assert manager.prewrite_point(1)
+    first = _run_git(tmp_path, "rev-parse", backup_manager.prewrite_point_tag(1)).stdout.strip()
+
+    chapter.write_text("正文 v2", encoding="utf-8")
+    assert manager.prewrite_point(1)
+
+    new_commit = _run_git(tmp_path, "rev-parse", backup_manager.prewrite_point_tag(1)).stdout.strip()
+    assert new_commit != first
+    archived = _archived_tags(tmp_path, "pre-ch0001-prev-*")
+    assert len(archived) == 1
+    assert _run_git(tmp_path, "rev-parse", archived[0]).stdout.strip() == first
+    # 归档只新增引用，旧提交仍在
+    assert _run_git(tmp_path, "cat-file", "-e", first).returncode == 0
+
+
+def test_prewrite_point_is_noop_without_git(tmp_path, monkeypatch):
+    """Git 不可用不算失败：写前点缺失只是降级为「回退到 ch{N-1}」，不该中断写作。"""
+    monkeypatch.setattr(backup_manager, "is_git_available", lambda: False)
+    chapter = tmp_path / "正文/第0001章.md"
+    chapter.parent.mkdir()
+    chapter.write_text("正文", encoding="utf-8")
+    manager = GitBackupManager(str(tmp_path))
+
+    assert manager.prewrite_point(1) is True
+    assert manager.prewrite_point_commit(1) == ""
+
+
+def test_prewrite_point_rejects_tag_creation_failure(tmp_path, monkeypatch):
+    manager = GitBackupManager(str(tmp_path), auto_init=False)
+    monkeypatch.setattr(manager, "git_available", True)
+    monkeypatch.setattr(manager, "_git_backup_paths", lambda: ["正文"])
+
+    def fake_git(args, check=True):
+        if args[0] == "diff":
+            return True, "", ""
+        if args[0] == "rev-parse" and args[1] == "--verify" and "refs/tags/" in args[2]:
+            return False, "", "no such tag"
+        if args[0] == "rev-parse":
+            return True, "a" * 40, ""
+        if args[0] in {"add", "commit"}:
+            return True, "", ""
+        return False, "", "tag unavailable"
+
+    monkeypatch.setattr(manager, "_run_git_command", fake_git)
+    assert manager.prewrite_point(1) is False
+    assert not manager._backup_receipt_path().exists()
+
+
+def test_list_backups_lists_prewrite_points_separately(tmp_path, capsys):
+    manager, _ = _prewrite_project(tmp_path)
+    assert manager.prewrite_point(1)
+    assert manager.backup(1)
+
+    manager.list_backups()
+
+    output = capsys.readouterr().out
+    assert "1 个章节版本点，0 个历史点" in output
+    assert "写前点" in output and "pre-ch0001" in output

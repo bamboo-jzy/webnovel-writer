@@ -16,8 +16,12 @@
 1. `discard_chapter_draft` —— 该章**没有 accepted commit** 时，正文、四份
    临时 artifacts、非 accepted 的 commit、章级 state 条目都还在「本章草稿」
    范畴内，可以直接删除；删除前整批归档到 `.webnovel/discarded/`。
-2. `rollback_chapter` —— 该章**已 accepted** 时，把工作树**原地**恢复成版本点
-   （`ch{N-1}`）的内容，再在**当前分支**追加一次「抛弃第 N 章」提交。
+2. `rollback_chapter` —— 该章**已 accepted** 时，把工作树**原地**恢复成回退目标
+   的内容，再在**当前分支**追加一次「抛弃第 N 章」提交。回退目标优先取**写前点**
+   `pre-ch{N}`（`/webnovel-write` 在正文落笔前打，见 `backup --prewrite`）：它精确
+   对应「本章正文还没开始写」，章纲、章级合同、以及规划本章期间顺手改的设定集/
+   大纲都在里面；没有写前点（旧项目、手工写作）时退回 `ch{N-1}`，并靠本章规划
+   产物抢救逻辑补回章纲与章级合同。
    全程不新建分支、不移动既有引用、不改写历史：被抛弃的那次提交仍是当前
    分支历史的一部分（新提交的父提交），版本点 tag `ch{N}` 也仍指向它。
 
@@ -40,8 +44,11 @@
 章号 off-by-one（最容易踩的坑）
 --------------------------------
 `chNNNN` 的语义是「第 N 章**完成后**」（`backup --chapter N` = 写完章 Step 6）。
-所以抛弃**第 N 章**要回退到 `ch{N-1}`，不是 `chN`。第 1 章没有 `ch0000`，
-回退目标是仓库的初始提交（`git rev-list --max-parents=0 HEAD`）。
+所以抛弃**第 N 章**时 `ch{N-1}` 是「上一章完成后」，并不是你要的时点：本章的章纲、
+章级合同、以及规划本章期间顺手改的设定集/大纲都不在它里面。有写前点 `pre-ch{N}`
+时以写前点为准（那里就已是「本章正文还没落笔」）；没有写前点（旧项目、手工写作）
+才退回 `ch{N-1}`，并靠 `planned_artifact_paths()` 抢救本章规划产物。第 1 章没有
+`ch0000`，回退目标是仓库的初始提交（`git rev-list --max-parents=0 HEAD`）。
 """
 
 from __future__ import annotations
@@ -56,6 +63,7 @@ from pathlib import Path
 from typing import Any
 
 from security_utils import AtomicWriteError, atomic_write_json
+from backup_manager import prewrite_point_tag
 
 from .chapter_reloading import (
     ARTIFACT_FILES,
@@ -253,6 +261,8 @@ def _rollback_probe(root: Path, chapter: int) -> dict:
         "source_commit": "",
         "dirty_paths": [],
         "recovery_hint": "",
+        "prewrite_point_tag": prewrite_point_tag(chapter),
+        "prewrite_point_exists": False,
         "version_point_tag": version_point_tag(chapter),
         "version_point_exists": False,
         "blockers": [],
@@ -271,7 +281,19 @@ def _rollback_probe(root: Path, chapter: int) -> dict:
     ok, branch, _ = _git(root, "rev-parse", "--abbrev-ref", "HEAD")
     probe["source_branch"] = branch if ok and branch != "HEAD" else ""
 
-    if chapter > 1:
+    # 回退目标：优先写前点 `pre-ch{N}` —— 它精确对应「本章正文还没落笔」，
+    # 章纲、章级合同、以及规划本章期间顺手改的设定集/大纲都在里面。
+    # 没有写前点（旧项目、手工写作）才退回 ch{N-1}，并靠规划产物抢救逻辑补回。
+    prewrite_ok, prewrite_commit, _ = _git(
+        root, "rev-parse", f"{probe['prewrite_point_tag']}^{{commit}}"
+    )
+    probe["prewrite_point_exists"] = bool(prewrite_ok)
+    if prewrite_ok:
+        probe["prewrite_point_commit"] = prewrite_commit
+        probe["target_kind"] = "prewrite_point"
+        probe["target_tag"] = probe["prewrite_point_tag"]
+        probe["target_commit"] = prewrite_commit
+    elif chapter > 1:
         target_tag = version_point_tag(chapter - 1)
         probe["target_kind"] = "version_point"
         probe["target_tag"] = target_tag
@@ -282,7 +304,8 @@ def _rollback_probe(root: Path, chapter: int) -> dict:
             probe["blockers"].append({
                 "code": "version_point_missing",
                 "message": (
-                    f"找不到回退目标版本点 {target_tag}（第 {chapter} 章抛弃后应回到「第 {chapter - 1} 章完成后」）。"
+                    f"找不到回退目标：第 {chapter} 章没有写前点（{probe['prewrite_point_tag']}），"
+                    f"目标版本点 {target_tag}（第 {chapter - 1} 章完成后）也不存在。"
                     "请先补齐该版本点，或改用更早的版本点手工回退。"
                 ),
             })
@@ -478,11 +501,28 @@ def plan_chapter_discard(project_root: str | Path, chapter: int, *, state: dict 
         ]
     elif plan["classification"] == "accepted":
         target_label = rollback.get("target_tag") or rollback.get("target_commit") or f"ch{chapter - 1:04d}"
+        using_prewrite = rollback.get("target_kind") == "prewrite_point"
+        preserved = planned_artifact_paths(root, chapter)
+        preserved_label = "、".join(path.relative_to(root).as_posix() for path in preserved)
+        if using_prewrite:
+            keep_note = (
+                f"回退目标 {target_label} 已包含第 {chapter} 章的章纲与章级合同（{preserved_label}），"
+                "回退后仍在，可直接改章纲再重写"
+                if preserved
+                else f"回退目标 {target_label} 是写前点，第 {chapter} 章尚无章纲或章级合同"
+            )
+        else:
+            keep_note = (
+                "保留第 %d 章的规划产物并写回：%s" % (chapter, preserved_label)
+                if preserved
+                else f"第 {chapter} 章暂无章纲或章级合同需要额外保留"
+            )
         plan["planned_actions"] = [
             f"归档 正文 下第 {chapter} 章正文与本章 commit 到 .webnovel/discarded/",
-            f"把工作树与索引原地恢复成版本点 {target_label} 的内容（{rollback.get('command') or 'git read-tree -u --reset <版本点>'}）",
-            f"在当前分支追加一次「抛弃第 {chapter} 章」提交（{rollback.get('commit_message') or 'Discard chapter N: restore to <版本点>'}）",
-            "同时还原 正文 / 大纲 / 设定集 / 文风 / .story-system 与 .webnovel 状态文件（含 index.db）",
+            f"把工作树与索引原地恢复成回退目标 {target_label} 的内容（{rollback.get('command') or 'git read-tree -u --reset <回退目标>'}）",
+            keep_note,
+            f"在当前分支追加一次「抛弃第 {chapter} 章」提交（{rollback.get('commit_message') or 'Discard chapter N: restore to <回退目标>'}）",
+            "同时还原 正文 / 设定集 / 文风 / 卷级大纲 / .story-system 其余合同与 .webnovel 状态文件（含 index.db）",
             "不新建分支、不删除提交、不移动版本点 tag：被抛弃的提交仍是当前分支历史的一部分",
         ]
     return plan
@@ -533,6 +573,82 @@ def _artifact_chapter(payload: Any) -> int:
     if start and start == end:
         return start
     return 0
+
+
+# ---------------------------------------------------------------------------
+# 章级规划产物（原地回退时保留）
+# ---------------------------------------------------------------------------
+
+def planned_artifact_paths(root: Path, chapter: int) -> list[Path]:
+    """第 N 章的**规划产物**：章纲与章级合同。
+
+    这些是「写正文的输入」，不是「正文的产物」——抛弃第 N 章的正文与履约后，
+    工作树必须落在「正文没了、但章纲还在」的时点，否则作者拿不回章纲、只能从零重建。
+
+    章纲有两种落盘方式，都整份保留：
+    - `split`：`大纲/第N章-*.md`，只属于本章。
+    - `legacy_volume`：章纲是卷级详细大纲里的 `### 第N章` 小节，**该文件同时装着邻章的
+      章纲**。仍然整份带回——按「每层只有最后一个单位可改」的规则，版本点之后卷纲上
+      合法的新增只可能落在第 N 章；不保留就等于把作者要留的这份章纲一并删掉。
+      代价是卷级顶栏/节拍那类文字也会停在回退前版本（不做小节级外科手术：拆段依赖
+      标题锚点，锚点格式一变就会写坏正文文件）。
+    """
+    from chapter_outline_loader import find_chapter_outline_file
+
+    chapter = _safe_int(chapter)
+    paths: list[Path] = []
+    try:
+        outline, source = find_chapter_outline_file(root, chapter)
+    except Exception:  # noqa: BLE001 - 章纲解析失败不应阻断抛弃
+        outline, source = None, "missing"
+    if outline is not None and source in {"split", "legacy_volume"} and outline.is_file():
+        paths.append(outline)
+    story_root = root / ".story-system"
+    for relative in (
+        Path("chapters") / f"chapter_{chapter:03d}.json",
+        Path("reviews") / f"chapter_{chapter:03d}.review.json",
+    ):
+        candidate = story_root / relative
+        if candidate.is_file():
+            paths.append(candidate)
+    return paths
+
+
+def _capture_planned_artifacts(root: Path, chapter: int) -> list[tuple[str, bytes]]:
+    """回退前把规划产物读进内存。回退有 `working_tree_dirty` 前置闸门，此处内容即登记内容。"""
+    snapshots: list[tuple[str, bytes]] = []
+    for path in planned_artifact_paths(root, chapter):
+        try:
+            relative = path.resolve().relative_to(root).as_posix()
+        except ValueError:
+            continue
+        try:
+            snapshots.append((relative, path.read_bytes()))
+        except OSError:
+            continue
+    return snapshots
+
+
+def _restore_planned_artifacts(root: Path, snapshots: list[tuple[str, bytes]]) -> list[str]:
+    """回退后把规划产物写回工作树；返回**真正需要恢复**的相对路径。
+
+    与版本点内容已一致的不算「恢复」，免得制造无意义改动。
+    """
+    restored: list[str] = []
+    for relative, content in snapshots:
+        path = root / relative
+        try:
+            if path.is_file() and path.read_bytes() == content:
+                continue
+        except OSError:
+            pass
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+        except OSError:
+            continue
+        restored.append(relative)
+    return restored
 
 
 # ---------------------------------------------------------------------------
@@ -756,6 +872,10 @@ def rollback_chapter(
         report.update(
             ok=True,
             status="preview",
+            target_kind=str(rollback.get("target_kind") or ""),
+            target_ref=str(rollback.get("target_tag") or rollback.get("target_commit") or ""),
+            prewrite_point_tag=str(rollback.get("prewrite_point_tag") or ""),
+            prewrite_point_exists=bool(rollback.get("prewrite_point_exists")),
             command=rollback.get("command", ""),
             commit_message=rollback.get("commit_message", ""),
         )
@@ -771,9 +891,11 @@ def rollback_chapter(
         return report
 
     report.update(command=command, target_ref=target_ref, target_commit=target_commit,
-                  commit_message=commit_message)
+                  commit_message=commit_message, target_kind=str(rollback.get("target_kind") or ""))
 
     # 1) 先归档被抛弃的正文与本章 commit（与草稿路径同一归档口径，可原样复制回去）
+    #    规划产物（章纲 / 章级合同）在整树还原前先取出来，回退后写回，见 2.6。
+    planned = _capture_planned_artifacts(root, chapter)
     archived: list[str] = []
     archive = _archive_target(root, chapter)
     try:
@@ -803,6 +925,25 @@ def rollback_chapter(
             f"归档目录 {archive} 在恢复过程中被覆盖；被抛弃的正文仍可用 git show {label}:正文/第{chapter}章-*.md 取回。"
         )
 
+    # 2.5) 先核对回退本身是否精确 —— 此刻工作树还没写回规划产物，应当逐字等于版本点
+    tree_ok, _, _ = _git(root, "diff", "--quiet", target_commit)
+    report["tree_matches_target"] = tree_ok
+
+    # 2.6) 写回第 N 章的规划产物（章纲与章级合同）。`ch{N-1}` 里通常没有这些文件
+    #      （章纲多是「第 N-1 章完成后」才规划的），整树还原会把它们一并带走；
+    #      显式带回并纳入本次「抛弃」提交，作者才能直接改章纲而不必从零重建。
+    restored = _restore_planned_artifacts(root, planned)
+    if restored:
+        add_ok, add_out, add_err = _git(root, "add", "--", *restored)
+        if not add_ok:
+            report["error"] = (
+                f"规划产物写回后暂存失败（工作树已恢复成 {target_ref}，提交未落盘）："
+                f"{add_err or add_out}；可手工 git add 后再 commit。"
+            )
+            return report
+    report["planning_preserved"] = restored
+    report["planned_artifacts"] = [relative for relative, _ in planned]
+
     # 3) 在当前分支追加一次「抛弃」提交；工作树已等于版本点时不产生空提交
     staged_ok, staged_paths, staged_err = _git(
         root, "-c", "core.quotepath=false", "diff", "--cached", "--name-only", "HEAD"
@@ -823,36 +964,81 @@ def rollback_chapter(
                 f"可手工执行 git commit -m \"{commit_message}\""
             )
             return report
+    elif rollback.get("target_kind") == "prewrite_point":
+        # 写前点模式：工作树与回退目标一致 ⇒「本章正文与履约产物都不存在」。
+        # 此时仍要留下「抛弃」提交：否则 HEAD 还停在含本章正文的那次提交上，
+        # 工作树已回退、历史却没记录，审计链断在中间。
+        ok, out, err = _git(root, "commit", "--allow-empty", "-m", commit_message)
+        report["commit_stdout"] = out
+        if not ok:
+            report["error"] = (
+                f"git commit 失败（工作树已恢复成 {target_ref}，提交未落盘）：{err or out}；"
+                f"可手工执行 git commit --allow-empty -m \"{commit_message}\""
+            )
+            return report
+        report["empty_commit"] = True
     else:
         report.setdefault("warnings", []).append(
             f"工作树已等于 {target_ref}，没有产生新的提交。"
         )
 
-    # 4) 回退后核对：新提交的树 == 版本点、本章正文消失、current_chapter 已回退
+    # 4) 回退后核对：本章正文消失、规划产物仍在、current_chapter 已回退
+    #    回退的终点是「正文没了、但章纲还在」——这条必须与 tree/正文一起核对并纳入 ok，
+    #    否则章纲被整树还原带走时，报告会以 ok=true 掩盖掉作者拿不回章纲的事实。
     ok, head, _ = _git(root, "rev-parse", "HEAD")
     report["head_commit"] = head if ok else ""
-    tree_ok, _, _ = _git(root, "diff", "--quiet", target_commit, "HEAD")
     body_left = _body_candidates(root, chapter)
+    missing = [relative for relative, _ in planned if not (root / relative).is_file()]
     state_after = read_object(root / STATE_REL, optional=True)
     current_after = _safe_int((state_after.get("progress") or {}).get("current_chapter"))
+    if missing:
+        report.setdefault("warnings", []).append(
+            "规划产物在回退后仍缺失（回退终点应是「正文没了、章纲还在」）："
+            + "、".join(missing)
+            + "；请 git status 手工确认。"
+        )
+    using_prewrite = rollback.get("target_kind") == "prewrite_point"
     report.update(
-        ok=tree_ok and not body_left,
+        ok=bool(report.get("tree_matches_target")) and not body_left and not missing,
         status="rolled_back",
-        tree_matches_target=tree_ok,
+        target_kind=str(rollback.get("target_kind") or ""),
+        prewrite_point_tag=str(rollback.get("prewrite_point_tag") or ""),
+        prewrite_point_exists=bool(rollback.get("prewrite_point_exists")),
         chapter_body_absent=not body_left,
+        planning_artifacts_present=not missing,
+        missing_after_rollback=missing,
         current_chapter_after=current_after,
         source_branch=rollback.get("source_branch", ""),
         source_commit=rollback.get("source_commit", ""),
         recovery_hint=rollback.get("recovery_hint", ""),
         next_steps=[
-            f"仍在分支 {rollback.get('source_branch') or '当前分支'}，工作树是「第 {chapter - 1} 章完成后」的状态。",
-            f"要写的下一章仍是第 {chapter} 章；章纲 大纲/第{chapter}章-*.md 未被回退影响。",
+            (
+                f"仍在分支 {rollback.get('source_branch') or '当前分支'}，工作树已回到写前点 {target_ref}"
+                f"（第 {chapter} 章正文还没开始写；写这一章期间顺手改的设定集/大纲也一并回到那一刻）。"
+                if using_prewrite
+                else f"仍在分支 {rollback.get('source_branch') or '当前分支'}，工作树是「第 {chapter} 章正文已撤、章纲仍在」的时点。"
+            ),
+            (
+                f"第 {chapter} 章的规划产物已随本次提交保留：{'、'.join(restored)}；"
+                f"可直接 /webnovel-chapter-revise {chapter} 改章纲，不必从零重建。"
+                if restored
+                else (
+                    f"第 {chapter} 章的章纲与章级合同已随回退目标 {target_ref} 原样恢复（内容与回退前一致）；"
+                    f"可直接 /webnovel-chapter-revise {chapter} 改章纲。"
+                    if planned and using_prewrite
+                    else (
+                        f"第 {chapter} 章的章纲与章级合同与版本点内容一致，本就在版本点内，无需写回。"
+                        if planned
+                        else f"第 {chapter} 章没有可保留的章纲或章级合同（该章尚未规划）。"
+                    )
+                )
+            ),
             f"被抛弃的正文可用 git show {rollback.get('source_commit', 'HEAD^')[:8]}:正文/第{chapter}章-*.md 取回，"
             f"另有归档副本在 {archive}。",
         ],
     )
     if not report["ok"]:
-        report["error"] = "回退后核对未通过：工作树或正文与预期不一致，请先 git status 手工确认。"
+        report["error"] = "回退后核对未通过：工作树、正文或规划产物与预期不一致，请先 git status 手工确认。"
     return report
 
 
@@ -879,9 +1065,14 @@ def format_chapter_discard_report(report: dict, output_format: str = "text") -> 
         f"removed: {report.get('removed', [])}",
         f"kept: {report.get('kept', [])}",
         f"command: {report.get('command', '')}",
+        f"target_kind: {report.get('target_kind', '')}",
+        f"prewrite_point_tag: {report.get('prewrite_point_tag', '')}",
+        f"prewrite_point_exists: {report.get('prewrite_point_exists', '')}",
         f"commit_message: {report.get('commit_message', '')}",
         f"changed_paths: {report.get('changed_paths', [])}",
         f"tree_matches_target: {report.get('tree_matches_target', '')}",
+        f"planning_preserved: {report.get('planning_preserved', [])}",
+        f"planning_artifacts_present: {report.get('planning_artifacts_present', '')}",
         f"current_chapter_after: {report.get('current_chapter_after', '')}",
         f"recovery_hint: {report.get('recovery_hint', '')}",
         f"error: {report.get('error', '')}",
@@ -894,5 +1085,19 @@ def format_chapter_discard_report(report: dict, output_format: str = "text") -> 
     if warnings:
         lines.append("warnings:")
         lines.extend(f"  - {item}" for item in warnings)
-    lines.append("抛弃只动本章；章纲与其它章不受影响。")
+    preserved = report.get("planning_preserved") or []
+    if report.get("action") == "rollback" and report.get("status") == "rolled_back":
+        if report.get("target_kind") == "prewrite_point":
+            lines.append(
+                f"回退终点是写前点 {report.get('target_ref', '')}：第 {report.get('chapter')} 章正文还没开始写，"
+                "章纲 / 章级合同 / 当时的设定集与大纲都原样保留，可直接改章纲再重写。"
+            )
+        elif preserved:
+            lines.append(f"回退已写回本章规划产物（{'、'.join(preserved)}）；可直接改章纲，不必从零重建。")
+        elif report.get("planned_artifacts"):
+            lines.append("回退终点：正文已撤、章纲仍在（规划产物与版本点一致，无需写回）。")
+        else:
+            lines.append("回退终点：正文已撤；该章尚无章纲或章级合同需要保留。")
+    else:
+        lines.append("抛弃只动本章正文与履约产物；章纲保留，其它章不受影响。")
     return "\n".join(lines)

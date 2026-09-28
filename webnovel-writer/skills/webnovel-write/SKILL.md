@@ -91,6 +91,23 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" \
 
 若当前正文、前置章节或依赖事实存在 `stale` / `previous_chapter_revision_changed`，必须先按报告核对受影响章纲和合同，再运行 `/webnovel-chapter-reload`；不得自动改写下游正文。若履约对账状态为 `needs_reconcile`，必须先预览并记录绑定当前 validation input 的作者裁决，不能把 artifact 自报的 decision 当作授权。
 
+### 准备：为本章打写前点
+
+Step 1 之前、正文落笔之前，先打一个**写前点**。此刻章纲、章级合同、场景契约都已确认新鲜，工作树就代表「本章正文还没开始写」：
+
+```bash
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" \
+  backup --prewrite \
+  --chapter {chapter_num} \
+  --chapter-title "{title}"
+```
+
+写前点是 tag `pre-ch{NNNN}`，与正式版本点 `ch{NNNN}` 分属两个命名空间：不参与 `verified_backup`，也不计入 `list_backups` 的版本点统计。它的用途是让 `/webnovel-chapter-discard {chapter_num}` 精确回退到这一刻 —— 抛弃本章正文后，章纲、章级合同、以及写这一章期间顺手改的设定集/大纲都还在，不必依赖规划产物抢救逻辑。
+
+- 命令返回非 0 时**不要中断写作**：写前点缺失只会让 `chapter-discard` 退回上一章版本点 `ch{N-1}` 并用规划产物写回兜底。把失败如实记进过程提示，继续 Step 1。
+- 同一章重写时会前移写前点，旧点保留为 `pre-ch{NNNN}-prev-<时间戳>`。
+- 不要在 Step 1 之后再补打写前点：那时 drafting 已经产生过文件，回退终点就不再是「正文还没开始写」。
+
 ### Step 1：context-agent 生成写作任务书
 
 必须使用 `Agent` 工具调用 `context-agent`，不得由主流程自行整理任务书。
@@ -309,6 +326,8 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" bac
 
 备份必须以解析后的 `PROJECT_ROOT` 为准，禁止从工作区父目录执行裸全量 Git add，避免把书项目仓库作为父仓库的嵌入仓库/submodule 加入。
 
+这里建立的版本点 `ch{NNNN}` 与写作前打的写前点 `pre-ch{NNNN}` 配对：`/webnovel-chapter-discard {chapter_num}` 会优先回到写前点（「本章正文还没开始写」），而不是 `ch{N-1}`。
+
 ## 作者友好过程提示与恢复契约
 
 开始写章前先用作者语言说明本次目标、主要阶段和是否需要守在旁边，不承诺固定耗时。过程提示只说当前在做什么和会产生什么，不直接输出原始 JSON、traceback 或长命令日志；技术详情写入 `.webnovel/logs/run_last.log`：
@@ -376,7 +395,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" use
 **改完章纲想重新生成正文**时，先看本章状态，两条路都成立但顺序不同：
 
 - **正文还是草稿（本章未 accepted）**：先用 `/webnovel-chapter-revise {chapter_num}` 改章纲并**刷新章级合同**——只改章纲不刷合同会让 phase 落到 `plan_in_progress`，prewrite gate 报 `chapter_contract_stale`——再跑本流程；`run-ledger write-resume` 会因章纲晚于正文给出 `outline_newer_than_draft` 确认项，选「重新起草」即重新生成正文（先备份、重新登记输入，不复用旧审查结果）。
-- **本章已 accepted**：**不能直接重跑**。`chapter_committed` 不在写前允许的 phase 里，prewrite gate 恒报 `phase_not_ready_for_prewrite`，与是否刷新合同无关；必须先用 `/webnovel-chapter-discard {chapter_num}` 把这章回退掉（**回退会整树还原，所以先回退、再改章纲**，否则章纲改动会被一起回退），然后改章纲、再写。
+- **本章已 accepted**：**不能直接重跑**。`chapter_committed` 不在写前允许的 phase 里，prewrite gate 恒报 `phase_not_ready_for_prewrite`，与是否刷新合同无关；必须先用 `/webnovel-chapter-discard {chapter_num}` 把这章回退掉，再改章纲、再写。回退会把本章章纲与章级合同一并写回（内容取回退前的当前版本），章纲改动不会被整树还原吃掉；但仍建议按「先回退、再改章纲」的顺序——先改的话 `chapter-revise` 写进 state 的章纲/合同重登记会随回退丢失，还得重做一次。
 - 本章后面还有已提交的章时，discard 会被 `downstream_chapters_exist` 阻断，`/webnovel-chapter-reload {chapter_num}` 也会被方向透传的「章-正」末端约束以 `handoff_target_locked` 阻断（只允许重载最后一章正文）。该约束是**硬约束**：`chapter-commit` 的写入入口与 `write-gate --stage precommit` 前置门同样会阻断非最后一章，`--allow-fact-revision` 也不能绕过。此时**没有「只改某一章正文」的入口**，唯一通道是从这一章起整条尾巴按章序回退重写，或走 `/webnovel-chapter-discard {chapter_num}` 再依次补写。不要试图绕过阻断：直接改写正文文件而不重载会让 revision 与正文不一致，后续校验与提交都会报错。
 
 ## 作者友好最终报告契约

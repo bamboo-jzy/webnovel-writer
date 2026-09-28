@@ -33,7 +33,7 @@ argument-hint: "[章号] [修改诉求，可选]"
 
 - 只处理**已存在的独立章纲**（`大纲/第N章-*.md`）。章纲不存在时停止，并指向 `/webnovel-chapter-plan {volume_id} {range}` 生成。
 - **只处理最后一章的章纲**。该章不是最后一章时停止，并说明它是既定事实；机器通道只支持最后一章。
-- 若该章正文已存在或已有 accepted commit，章纲修订**不**自动改动正文或 commit；完成后明确提示作者运行 `/webnovel-chapter-reload {chapter}` 走正文重载链。
+- 若该章正文已存在或已有 accepted commit，章纲修订**不**自动改动正文或 commit。改完章纲后处理正文二选一：**只改几处**走 `/webnovel-chapter-reload {chapter}` 重载链；**整章重写**走 `/webnovel-chapter-discard {chapter}` 先回退（`chapter_committed` 不在写前允许的 phase 里，prewrite 恒报 `phase_not_ready_for_prewrite`，不能原地重跑）。回退会把本章章纲与章级合同写回，章纲改动不会丢。
 - 章纲修订只影响当前章，不批量修改其他章；影响后续章纲承接的，列入"建议确认"由作者决定是否另行修订。
 - 纯人工编辑章纲后，不需要运行本 Skill；下次写作前 `write-gate --stage prewrite` 会以 `chapter_contract_stale` 阻断，此时运行 `/webnovel-chapter-plan` 重刷合同，或用本 Skill 走完确认-刷新-登记闭环。
 

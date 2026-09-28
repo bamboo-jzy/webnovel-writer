@@ -24,6 +24,7 @@ from data_modules.chapter_discard import (  # noqa: E402
     discard_chapter_draft,
     format_chapter_discard_report,
     plan_chapter_discard,
+    planned_artifact_paths,
     rollback_chapter,
     version_point_tag,
 )
@@ -344,14 +345,17 @@ def _assert_worktree_restored(root: Path, rel: str, tag: str) -> None:
     git 写工作树可能被静默吞掉：目标文件缺失、`git status` 记为 ` D`，而索引与新提交的
     树都正确等于版本点。此类证据下跳过，避免把环境缺陷误判成产品缺陷；树恢复已在
     工作区外烟测验证（`.workbuddy/tmp/discard_smoke.py`）。
+
+    判据用**该文件的 blob**而不是整棵树：回退现在会额外写回本章规划产物，
+    新提交的树不再逐字等于版本点，树级比对会被保留产物带偏。
     """
     if (root / rel).exists():
         return
     tracked = _git(root, "-c", "core.quotepath=false", "ls-files").stdout
-    head_tree = _git(root, "rev-parse", "HEAD^{tree}").stdout.strip()
-    point_tree = _git(root, "rev-parse", f"{tag}^{{tree}}").stdout.strip()
-    if head_tree == point_tree and rel in tracked and f" D {rel}" in _status_porcelain(root):
-        pytest.skip(f"本机沙箱吞掉 git 写工作树（{rel} 缺失但新提交树=={tag}）；树恢复见工作区外烟测")
+    head_blob = _git(root, "rev-parse", f"HEAD:{rel}").stdout.strip()
+    point_blob = _git(root, "rev-parse", f"{tag}:{rel}").stdout.strip()
+    if head_blob and head_blob == point_blob and rel in tracked and f" D {rel}" in _status_porcelain(root):
+        pytest.skip(f"本机沙箱吞掉 git 写工作树（{rel} 缺失但新提交里该文件=={tag}）；树恢复见工作区外烟测")
     assert (root / rel).exists(), f"回退后 {rel} 未恢复：\n{_status_porcelain(root)}"
 
 
@@ -388,6 +392,154 @@ def test_rollback_restores_tree_in_place_and_keeps_commit_recoverable(tmp_path):
     assert _git(root, "rev-parse", "ch0002").stdout.strip() == discarded_commit
     show = _git(root, "show", "ch0002:正文/第0002章-转折.md", check=False)
     assert show.returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# 原地回退保留本章规划产物（章纲 / 章级合同）
+# ---------------------------------------------------------------------------
+
+def test_rollback_keeps_chapter_outline_missing_from_version_point(tmp_path):
+    """串行节奏：第 2 章章纲是「第 1 章完成后」才规划的，抛弃正文不该把它一起带走。"""
+    root = _git_project(tmp_path)
+    probe = _git(root, "rev-parse", "--verify", "ch0001:大纲/第2章-转折.md", check=False)
+    assert probe.returncode != 0, "夹具应让第 2 章章纲晚于 ch0001 生成"
+
+    report = rollback_chapter(root, 2)
+
+    assert report["ok"], report
+    assert report["planning_preserved"] == ["大纲/第2章-转折.md"]
+    assert (root / "大纲/第2章-转折.md").read_text(encoding="utf-8") == "目标：x\n"
+    committed = _git(root, "show", "HEAD:大纲/第2章-转折.md", check=False)
+    assert committed.returncode == 0 and "目标：x" in committed.stdout
+    # 正文与 commit 照旧被抛弃
+    assert not (root / "正文/第0002章-转折.md").exists()
+    assert not (root / ".story-system/commits/chapter_002.commit.json").exists()
+
+
+def test_rollback_keeps_chapter_level_contracts(tmp_path):
+    """章级合同同属规划产物，与章纲一起保留，否则改完章纲还要重新规划。"""
+    root = _git_project(tmp_path)
+    _write_json(root / ".story-system/chapters/chapter_002.json", {"chapter": 2, "goal": "转折"})
+    _write_json(root / ".story-system/reviews/chapter_002.review.json", {"chapter": 2, "blocking_rules": []})
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "第2章章级合同")
+    _git(root, "tag", "-f", "ch0002")
+
+    report = rollback_chapter(root, 2)
+
+    assert report["ok"], report
+    assert ".story-system/chapters/chapter_002.json" in report["planning_preserved"]
+    assert ".story-system/reviews/chapter_002.review.json" in report["planning_preserved"]
+    assert (root / ".story-system/chapters/chapter_002.json").is_file()
+    assert _git(root, "show", "HEAD:.story-system/chapters/chapter_002.json", check=False).returncode == 0
+
+
+def test_rollback_prefers_current_outline_over_version_point_copy(tmp_path):
+    """章纲在版本点里是旧版、HEAD 里是新版时，回退该留新版（保留作者最新意图）。"""
+    root = _git_project(tmp_path, with_chapter_two=False)
+    (root / "大纲/第2章-转折.md").write_text("旧版章纲\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "批次规划第2章章纲")
+    _git(root, "tag", "-f", "ch0001")
+
+    _chapter_two_files(root, accepted=True)
+    (root / "大纲/第2章-转折.md").write_text("新版章纲：反派出场提前\n", encoding="utf-8")
+    _write_state(root, V2_PROGRESS, chapter_meta={"2": {"dominant_strand": "quest"}})
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "第2章完成")
+    _git(root, "tag", "ch0002")
+
+    report = rollback_chapter(root, 2)
+
+    assert report["ok"], report
+    assert "大纲/第2章-转折.md" in report["planning_preserved"]
+    assert (root / "大纲/第2章-转折.md").read_text(encoding="utf-8") == "新版章纲：反派出场提前\n"
+
+
+def test_planned_artifact_paths_keeps_legacy_volume_outline(tmp_path):
+    """章纲落在卷级详细大纲时仍整份保留：不保留就等于把作者要留的这份章纲一并删掉。"""
+    root = tmp_path
+    (root / "大纲").mkdir(parents=True, exist_ok=True)
+    (root / ".webnovel").mkdir(parents=True, exist_ok=True)
+    (root / ".webnovel/state.json").write_text(
+        json.dumps({"progress": {"chapters_planned": [{"chapter": 2, "volume": 1}]}}),
+        encoding="utf-8",
+    )
+    (root / "大纲/第1卷-详细大纲.md").write_text("### 第2章：转折\n目标：x\n", encoding="utf-8")
+
+    names = [path.name for path in planned_artifact_paths(root, 2)]
+
+    assert names == ["第1卷-详细大纲.md"]
+
+
+def test_planned_artifact_paths_keeps_split_outline_and_contracts(tmp_path):
+    root = tmp_path
+    (root / "大纲").mkdir(parents=True, exist_ok=True)
+    (root / ".story-system/chapters").mkdir(parents=True, exist_ok=True)
+    (root / "大纲/第2章-转折.md").write_text("目标：x\n", encoding="utf-8")
+    (root / ".story-system/chapters/chapter_002.json").write_text("{}", encoding="utf-8")
+
+    names = [path.name for path in planned_artifact_paths(root, 2)]
+
+    assert names == ["第2章-转折.md", "chapter_002.json"]
+
+
+def test_rollback_reports_planning_gap_when_nothing_needs_restoring(tmp_path):
+    """版本点里已有同内容时不该虚报「已写回」，报告要按实际分支：仍在，只是无需写回。"""
+    root = _git_project(tmp_path, with_chapter_two=False)
+    (root / "大纲/第2章-转折.md").write_text("目标：x\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "批次规划第2章章纲")
+    _git(root, "tag", "-f", "ch0001")
+
+    (root / "正文/第0002章-转折.md").write_text("# 第2章\n" + "字" * 200, encoding="utf-8")
+    _write_json(root / ".story-system/commits/chapter_002.commit.json",
+                {"meta": {"chapter": 2, "status": "accepted"}})
+    _write_state(root, V2_PROGRESS, chapter_meta={"2": {"dominant_strand": "quest"}})
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "第2章完成")
+    _git(root, "tag", "ch0002")
+
+    report = rollback_chapter(root, 2)
+
+    assert report["ok"], report
+    assert report["planning_preserved"] == []
+    assert report["planning_artifacts_present"] is True
+    assert (root / "大纲/第2章-转折.md").read_text(encoding="utf-8") == "目标：x\n"
+    assert "本就在版本点内，无需写回" in report["next_steps"][1]
+
+
+def test_rollback_keeps_chapter_outline_when_it_lives_in_volume_detailed_outline(tmp_path):
+    """章纲落在卷级详细大纲、且该小节是版本点之后才写的 —— 回退终点仍须是「正文没了、章纲还在」。"""
+    root = _git_project(tmp_path, with_chapter_two=False)
+    volume_outline = root / "大纲/第1卷-详细大纲.md"
+    volume_outline.write_text("# 第1卷 详细大纲\n\n### 第1章：开端\n目标：开场。\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "第1章章纲进卷纲")
+    _git(root, "tag", "-f", "ch0001")
+
+    # ch0001 之后才把第 2 章小节补进卷纲（章纲生成晚于版本点）
+    volume_outline.write_text(
+        "# 第1卷 详细大纲\n\n### 第1章：开端\n目标：开场。\n### 第2章：转折\n目标：反派出场。\n",
+        encoding="utf-8",
+    )
+    (root / "正文/第0002章-转折.md").write_text("# 第2章\n" + "字" * 200, encoding="utf-8")
+    _write_json(root / ".story-system/commits/chapter_002.commit.json",
+                {"meta": {"chapter": 2, "status": "accepted"}})
+    _write_state(root, V2_PROGRESS, chapter_meta={"2": {"dominant_strand": "quest"}})
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "第2章完成")
+    _git(root, "tag", "ch0002")
+
+    report = rollback_chapter(root, 2)
+
+    assert report["ok"], report
+    assert report["planning_artifacts_present"] is True
+    assert report["missing_after_rollback"] == []
+    assert report["planning_preserved"] == ["大纲/第1卷-详细大纲.md"]
+    text = volume_outline.read_text(encoding="utf-8")
+    assert "### 第2章：转折" in text
+    assert not (root / "正文/第0002章-转折.md").exists()
 
 
 def test_rollback_twice_in_a_row_needs_no_manual_cleanup(tmp_path):
@@ -510,3 +662,100 @@ def test_cli_text_format_renders_blockers(tmp_path, monkeypatch, capsys):
     code, out = _run_cli(monkeypatch, capsys, root, "--chapter", "2", "--draft")
     assert code == 1
     assert "chapter_committed" in out
+
+
+# ---------------------------------------------------------------------------
+# 写前点：回退目标优先取「本章正文还没落笔」的那一刻
+# ---------------------------------------------------------------------------
+
+def _prewrite_project(root: Path) -> Path:
+    """串行到 ch0001 → 规划第 2 章 → 打写前点 pre-ch0002 → 第 2 章完成 ch0002。"""
+    root = _git_project(root, with_chapter_two=False)
+    (root / "大纲/第2章-转折.md").write_text("目标：x\n", encoding="utf-8")
+    _write_json(root / ".story-system/chapters/chapter_002.json", {"chapter": 2, "goal": "转折"})
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "规划第2章")
+    _git(root, "tag", "pre-ch0002")
+
+    _chapter_two_files(root, accepted=True)
+    _write_state(root, V2_PROGRESS, chapter_meta={"2": {"dominant_strand": "quest"}})
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "第2章完成")
+    _git(root, "tag", "ch0002")
+    return root
+
+
+def test_prewrite_point_tag_matches_backup_manager_namespace():
+    """tag 名由 backup_manager 建、由 chapter_discard 读，两个定义必须一致。"""
+    from backup_manager import prewrite_point_tag as backup_prewrite_tag
+    from data_modules.chapter_discard import prewrite_point_tag as discard_prewrite_tag
+
+    assert discard_prewrite_tag(2) == backup_prewrite_tag(2) == "pre-ch0002"
+
+
+def test_rollback_reports_version_point_target_without_prewrite_point(tmp_path):
+    """没有写前点（旧项目 / 手工写作）时仍按原逻辑回退 ch{N-1}。"""
+    root = _git_project(tmp_path)
+    rollback = plan_chapter_discard(root, 2)["rollback"]
+    assert rollback["target_kind"] == "version_point"
+    assert rollback["prewrite_point_exists"] is False
+    assert rollback["target_tag"] == "ch0001"
+
+
+def test_rollback_prefers_prewrite_point_target(tmp_path):
+    root = _prewrite_project(tmp_path)
+    rollback = plan_chapter_discard(root, 2)["rollback"]
+    assert rollback["allowed"], rollback["blockers"]
+    assert rollback["target_kind"] == "prewrite_point"
+    assert rollback["target_tag"] == "pre-ch0002"
+    assert rollback["prewrite_point_exists"] is True
+    assert rollback["command"] == "git read-tree -u --reset pre-ch0002"
+
+    branches_before = _branches(root)
+    report = rollback_chapter(root, 2)
+
+    assert report["ok"], report
+    assert report["target_kind"] == "prewrite_point"
+    assert report["target_ref"] == "pre-ch0002"
+    assert report["chapter_body_absent"] is True
+    assert report["planning_artifacts_present"] is True
+    # 正文与本章 commit 消失，章纲与章级合同原样保留（回退终点＝正文没了、章纲还在）
+    assert not (root / "正文/第0002章-转折.md").exists()
+    assert not (root / ".story-system/commits/chapter_002.commit.json").exists()
+    assert (root / "大纲/第2章-转折.md").read_text(encoding="utf-8") == "目标：x\n"
+    assert (root / ".story-system/chapters/chapter_002.json").is_file()
+    assert report["current_chapter_after"] == 1
+    # 被抛弃的提交仍在历史里：新提交把「第 2 章完成」当父提交，tag ch0002 未移动
+    discarded = _git(root, "rev-parse", "HEAD^").stdout.strip()
+    assert discarded == _git(root, "rev-parse", "ch0002").stdout.strip()
+    assert _git(root, "show", "ch0002:正文/第0002章-转折.md", check=False).returncode == 0
+    assert _branches(root) == branches_before
+
+
+def test_rollback_to_prewrite_point_undoes_side_edits_made_while_writing(tmp_path):
+    """写前点的语义是「撤销写这一章期间的一切」：期间顺手补的设定集也回到打点那一刻。"""
+    root = _prewrite_project(tmp_path)
+    settings = root / "设定集/人物.md"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text("写第2章期间补的设定\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "写第2章时顺带补设定")
+    _git(root, "tag", "-f", "ch0002")
+
+    report = rollback_chapter(root, 2)
+
+    assert report["ok"], report
+    assert report["target_kind"] == "prewrite_point"
+    # 写前点里还没有这个文件 → 随回退一起消失
+    assert not settings.exists()
+    assert (root / "大纲/第2章-转折.md").is_file()
+
+
+def test_rollback_dry_run_reports_prewrite_target_kind(tmp_path):
+    root = _prewrite_project(tmp_path)
+    report = rollback_chapter(root, 2, dry_run=True)
+
+    assert report["ok"] and report["status"] == "preview"
+    assert report["target_kind"] == "prewrite_point"
+    assert report["target_ref"] == "pre-ch0002"
+    assert not (root / ".webnovel/discarded").exists()

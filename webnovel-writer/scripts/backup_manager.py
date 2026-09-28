@@ -17,13 +17,19 @@ Git 集成备份管理系统 (Backup Manager with Git)
 2. 版本点 tag：每章一个 commit + tag（如 ch0045），指向该章最新已备份状态
 3. 版本点前移：同一章重写或修订后再次备份时，chNNNN 前移到新提交，
    旧版本点另存为 chNNNN-prev-<时间戳>，历史不丢、章节号不被占用
-4. 版本历史：git log 查看完整历史
-5. 差异对比：git diff 查看任意两个版本的差异
-6. 分支创建：git branch 从任意时间点创建分支
+4. 写前点（--prewrite）：正文落笔前打一个 tag pre-chNNNN。抛弃本章正文时，
+   回退终点因此是「正文还没开始写」的那一刻 —— 章纲、章级合同、以及写这一章
+   期间顺手改的设定集/大纲都还在，而不是被整树还原带回 ch{N-1}
+5. 版本历史：git log 查看完整历史
+6. 差异对比：git diff 查看任意两个版本的差异
+7. 分支创建：git branch 从任意时间点创建分支
 
 使用方式：
   # 在第 45 章完成后自动备份（git commit + tag ch0045）
   python backup_manager.py --chapter 45
+
+  # 在第 45 章正文落笔前打写前点（git commit + tag pre-ch0045）
+  python backup_manager.py --prewrite --chapter 45
 
   # 查看第 20 章和第 40 章的差异（git diff）
   python backup_manager.py --diff 20 40
@@ -42,6 +48,7 @@ Git 提交规范：
   - 提交信息格式: "Chapter {N}: {章节标题}"
   - 当前版本点: "ch{N}" (如 ch0045)，可前移，指向该章最新已备份状态
   - 历史版本点: "ch{N}-prev-<时间戳>"，只增不改，指向被前移前的状态
+  - 写前点: "pre-ch{N}" (如 pre-ch0045)，写正文前打，不参与版本点解析
   - 每个章节对应一个 commit + 一个 chNNNN tag
 
 数据一致性保证：
@@ -78,6 +85,19 @@ if sys.platform == "win32":
 
 class BackupError(RuntimeError):
     """Git backup operation failed."""
+
+
+#: 写正文前的回退点命名（`backup --prewrite --chapter N`）。
+#: 刻意与版本点 `chNNNN` 分属两个命名空间：不匹配 `GitBackupManager._CHAPTER_TAG_PATTERN`
+#: （`^ch(\d{4})$`），也不匹配 `git tag -l "ch*"`（前缀是 `pre-`），所以
+#: `verified_backup` / `list_backups` 的版本点统计 / 历史点解析都不会把它当章节版本点。
+_PREWRITE_TAG_PREFIX = "pre-ch"
+_PREWRITE_TAG_PATTERN = re.compile(r"^pre-ch(\d{4})$")
+
+
+def prewrite_point_tag(chapter_num: int) -> str:
+    """写前点 tag 名。语义是「第 N 章正文还没落笔」，与「第 N 章完成后」的 `ch{N}` 相对。"""
+    return f"{_PREWRITE_TAG_PREFIX}{int(chapter_num):04d}"
 
 
 class GitBackupManager:
@@ -561,6 +581,82 @@ __pycache__/
             for path in self._selected_backup_paths()
         ]
 
+    def _snapshot_commit(self, commit_message: str, *, noop_message: str) -> tuple[bool, str]:
+        """暂存故事主链并提交，返回 (是否成功, 提交 sha)。
+
+        没有变更时不产生空提交，直接用 HEAD 当提交点（版本点与写前点共用这一口径）。
+        """
+        backup_paths = self._git_backup_paths()
+        if not backup_paths:
+            print("❌ 备份失败：未找到可备份的故事主链或运行状态")
+            return False, ""
+        success, stdout, stderr = self._run_git_command(["add", "--", *backup_paths], check=False)
+        if not success:
+            print(f"❌ 备份失败：git add 失败: {self._format_git_output(stdout, stderr)}")
+            return False, ""
+
+        staged_ok, staged_files, staged_error = self._run_git_command(
+            ["diff", "--cached", "--name-only"], check=False
+        )
+        if not staged_ok:
+            print(f"备份失败：无法检查暂存区: {self._format_git_output(staged_files, staged_error)}")
+            return False, ""
+        if staged_files.strip():
+            success, stdout, stderr = self._run_git_command(
+                ["commit", "-m", commit_message], check=False
+            )
+            if not success:
+                print(f"备份失败：git commit 失败: {self._format_git_output(stdout, stderr)}")
+                return False, ""
+            print(f"Git 提交完成: {commit_message}")
+        else:
+            print(noop_message)
+
+        head_ok, head_output, head_error = self._run_git_command(
+            ["rev-parse", "--verify", "HEAD^{commit}"], check=False
+        )
+        if not head_ok:
+            print(f"备份失败：无法解析 HEAD: {self._format_git_output(head_output, head_error)}")
+            return False, ""
+        return True, head_output.strip()
+
+    def _place_point_tag(self, tag_name: str, commit: str) -> bool:
+        """把版本点 / 写前点 tag 放到 `commit` 上。
+
+        不存在则创建；已存在且指向同一提交则跳过；指向旧提交时先把旧点归档成
+        `<tag>-prev-<时间戳>` 再前移 —— 归档只新增引用，历史提交永不丢失。
+        """
+        existing_ok, existing_output, _ = self._run_git_command(
+            ["rev-parse", "--verify", f"refs/tags/{tag_name}^{{commit}}"], check=False
+        )
+        existing_commit = existing_output.strip()
+
+        if existing_ok and existing_commit == commit:
+            print(f"✅ Git tag 已存在且指向当前提交: {tag_name}")
+            return True
+
+        if existing_ok:
+            archived = self._archive_tag(tag_name, existing_commit)
+            if archived is None:
+                print(f"❌ 备份失败：旧版本点 {tag_name} 归档失败，为保住历史未前移 tag")
+                return False
+            success, stdout, stderr = self._run_git_command(
+                ["tag", "-f", tag_name, commit], check=False
+            )
+            if not success:
+                print(f"备份失败：前移 tag 失败: {self._format_git_output(stdout, stderr)}")
+                print(f"  旧版本点已保留为 {archived}，重跑备份即可重试")
+                return False
+            print(f"✅ Git tag 已前移: {tag_name}（旧版本点保留为 {archived}）")
+            return True
+
+        success, stdout, stderr = self._run_git_command(["tag", tag_name, commit], check=False)
+        if not success:
+            print(f"备份失败：创建 tag 失败: {self._format_git_output(stdout, stderr)}")
+            return False
+        print(f"✅ Git tag 已创建: {tag_name}")
+        return True
+
     def backup(self, chapter_num: int, chapter_title: str = "") -> bool:
         """
         备份当前状态（Git commit + tag，或本地备份）
@@ -575,17 +671,7 @@ __pycache__/
         if not self.git_available:
             return self._local_backup(chapter_num)
 
-        # Step 1: stage only story data and derived state; never stage the plugin or secrets.
-        backup_paths = self._git_backup_paths()
-        if not backup_paths:
-            print("❌ 备份失败：未找到可备份的故事主链或运行状态")
-            return False
-        success, stdout, stderr = self._run_git_command(["add", "--", *backup_paths], check=False)
-        if not success:
-            print(f"❌ 备份失败：git add 失败: {self._format_git_output(stdout, stderr)}")
-            return False
-
-        # Step 2: git commit
+        # Step 1-2: 暂存故事主链并提交。只 stage 故事数据与派生状态，绝不 stage 插件目录或密钥。
         commit_message = f"Chapter {chapter_num}"
         if chapter_title:
             # ============================================================================
@@ -593,77 +679,62 @@ __pycache__/
             # 原代码: commit_message += f": {chapter_title}"
             # 漏洞: chapter_title可能包含 Git 标志（如 --author, --amend）导致命令注入
             # ============================================================================
-            safe_chapter_title = sanitize_commit_message(chapter_title)
-            commit_message += f": {safe_chapter_title}"
-
-        staged_ok, staged_files, staged_error = self._run_git_command(
-            ["diff", "--cached", "--name-only"], check=False
+            commit_message += f": {sanitize_commit_message(chapter_title)}"
+        committed, current_commit = self._snapshot_commit(
+            commit_message, noop_message="本章无变更，使用当前提交作为备份点"
         )
-        if not staged_ok:
-            print(f"备份失败：无法检查暂存区: {self._format_git_output(staged_files, staged_error)}")
+        if not committed:
             return False
-        if staged_files.strip():
-            success, stdout, stderr = self._run_git_command(
-                ["commit", "-m", commit_message], check=False
-            )
-            if not success:
-                print(f"备份失败：git commit 失败: {self._format_git_output(stdout, stderr)}")
-                return False
-            print(f"Git 提交完成: {commit_message}")
-        else:
-            success, stdout, stderr = self._run_git_command(
-                ["rev-parse", "--verify", "HEAD^{commit}"], check=False
-            )
-            if not success:
-                print("备份失败：尚无可用提交")
-                return False
-            print("本章无变更，使用当前提交作为备份点")
 
         # Step 3: 维护章节版本点。chNNNN 始终指向「第 N 章最新已备份状态」：
         # 首次备份直接建 tag；同章重写/修订后再次备份时，先把旧点归档为 chNNNN-prev-<时间戳>，
         # 再把 tag 前移到当前提交。归档只新增引用，历史提交永不丢失。
         tag_name = f"ch{chapter_num:04d}"
-        head_ok, head_output, head_error = self._run_git_command(
-            ["rev-parse", "--verify", "HEAD^{commit}"], check=False
-        )
-        if not head_ok:
-            print(f"备份失败：无法解析 HEAD: {self._format_git_output(head_output, head_error)}")
+        if not self._place_point_tag(tag_name, current_commit):
             return False
-        current_commit = head_output.strip()
-
-        existing_ok, existing_output, _ = self._run_git_command(
-            ["rev-parse", "--verify", f"refs/tags/{tag_name}^{{commit}}"], check=False
-        )
-        existing_commit = existing_output.strip()
-
-        if existing_ok and existing_commit == current_commit:
-            print(f"✅ Git tag 已存在且指向当前提交: {tag_name}")
-            return self._record_git_receipt(chapter_num, tag_name, current_commit)
-
-        if existing_ok:
-            archived = self._archive_tag(tag_name, existing_commit)
-            if archived is None:
-                print(f"❌ 备份失败：旧版本点 {tag_name} 归档失败，为保住历史未前移 tag")
-                return False
-            success, stdout, stderr = self._run_git_command(
-                ["tag", "-f", tag_name, current_commit], check=False
-            )
-            if not success:
-                print(f"备份失败：前移 tag 失败: {self._format_git_output(stdout, stderr)}")
-                print(f"  旧版本点已保留为 {archived}，重跑备份即可重试")
-                return False
-            print(f"✅ Git tag 已前移: {tag_name}（旧版本点保留为 {archived}）")
-        else:
-            success, stdout, stderr = self._run_git_command(["tag", tag_name, current_commit], check=False)
-            if not success:
-                print(f"备份失败：创建 tag 失败: {self._format_git_output(stdout, stderr)}")
-                return False
-            print(f"✅ Git tag 已创建: {tag_name}")
 
         if not self._record_git_receipt(chapter_num, tag_name, current_commit):
             return False
 
         return True
+
+    def prewrite_point_commit(self, chapter_num: int) -> str:
+        """写前点指向的提交 sha；该章没打过写前点时返回空串。"""
+        if not self.git_available:
+            return ""
+        ok, commit, _ = self._run_git_command(
+            ["rev-parse", "--verify", f"refs/tags/{prewrite_point_tag(chapter_num)}^{{commit}}"],
+            check=False,
+        )
+        return commit.strip() if ok else ""
+
+    def prewrite_point(self, chapter_num: int, chapter_title: str = "") -> bool:
+        """在第 N 章正文落笔前打一个回退点：commit 当前工作树 + tag `pre-chNNNN`。
+
+        与 `backup()` 的三点差别：
+        - tag 走 `pre-chNNNN` 命名空间，不参与 `verified_backup` 与版本点统计；
+        - **不写** `backup_receipts.json` —— 它不是「本章完成后」的版本点，
+          不该出现在交付校验里；
+        - 同章重复打点时同样前移并归档旧点，口径与版本点一致。
+
+        Git 不可用不算失败：写前点缺失只会让 `chapter-discard` 回退到 `ch{N-1}`
+        并启用规划产物抢救逻辑，不该因此中断写作。
+        """
+        tag_name = prewrite_point_tag(chapter_num)
+        if not self.git_available:
+            print(f"⚠️  Git 不可用，跳过第 {chapter_num} 章写前点（{tag_name}）")
+            return True
+
+        print(f"📌 正在为第 {chapter_num} 章打写前点（{tag_name}）...")
+        commit_message = f"Pre-write chapter {chapter_num}"
+        if chapter_title:
+            commit_message += f": {sanitize_commit_message(chapter_title)}"
+        committed, current_commit = self._snapshot_commit(
+            commit_message, noop_message="工作树与上一提交一致，写前点直接指向当前提交"
+        )
+        if not committed:
+            return False
+        return self._place_point_tag(tag_name, current_commit)
 
     def diff(self, chapter_a: int, chapter_b: int):
         """对比两个版本的差异（Git diff）"""
@@ -737,6 +808,24 @@ __pycache__/
         archived_total = sum(len(entries) for entries in archived.values())
         print(f"\n总计：{len(chapters)} 个章节版本点，{archived_total} 个历史点")
 
+        # 写前点单列：`pre-chNNNN` 不是版本点，混进上面的统计会误导作者。
+        pre_ok, pre_output, _ = self._run_git_command(
+            ["tag", "-l", f"{_PREWRITE_TAG_PREFIX}*"], check=False
+        )
+        prewrite_tags = sorted(
+            tag.strip()
+            for tag in (pre_output or "").splitlines()
+            if _PREWRITE_TAG_PATTERN.match(tag.strip())
+        )
+        if pre_ok and prewrite_tags:
+            print("\n📌 写前点（正文落笔前的回退点）：\n")
+            for tag in prewrite_tags:
+                info_ok, commit_info, _ = self._run_git_command(
+                    ["log", tag, "-1", "--format=%h %ci %s"],
+                    check=False,
+                )
+                print(f"📌 {tag} | {commit_info.strip() if info_ok else '(无法读取提交信息)'}")
+
         # 显示最近 5 次提交
         print("\n📜 最近提交历史：\n")
         success, log_output, _ = self._run_git_command(
@@ -800,6 +889,7 @@ def main():
 
     parser.add_argument('--chapter', type=int, help='备份章节号')
     parser.add_argument('--chapter-title', help='章节标题（可选）')
+    parser.add_argument('--prewrite', action='store_true', help='写前点模式：正文落笔前打 pre-chNNNN 回退点（配 --chapter）')
     parser.add_argument('--diff', nargs=2, type=int, metavar=('A', 'B'), help='对比两个版本')
     parser.add_argument('--create-branch', type=int, metavar='CHAPTER', help='从指定章节创建分支')
     parser.add_argument('--branch-name', help='分支名称')
@@ -819,8 +909,15 @@ def main():
     manager = GitBackupManager(project_root)
 
     # 执行操作
+    if args.prewrite and not args.chapter:
+        print("❌ --prewrite 需要配合 --chapter 使用", file=sys.stderr)
+        sys.exit(1)
+
     if args.chapter:
-        success = manager.backup(args.chapter, args.chapter_title or "")
+        if args.prewrite:
+            success = manager.prewrite_point(args.chapter, args.chapter_title or "")
+        else:
+            success = manager.backup(args.chapter, args.chapter_title or "")
         if success is False:
             sys.exit(1)
 

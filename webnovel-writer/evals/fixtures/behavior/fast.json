@@ -121,7 +121,7 @@
       "id": "skill_chapter_discard_contract",
       "type": "skill_contract",
       "skill": "webnovel-chapter-discard",
-      "description": "Discarding a chapter is tail-only: drafts are archived then deleted; accepted chapters restore the previous version point in place on the current branch, without creating a new branch or rewriting history.",
+      "description": "Discarding a chapter is tail-only: drafts are archived then deleted; accepted chapters restore the chapter's pre-write point (falling back to the previous version point when absent) in place on the current branch, without creating a new branch or rewriting history.",
       "required": [
         "chapter-discard",
         "--dry-run",
@@ -136,7 +136,13 @@
         "不删除任何提交",
         "downstream_chapters_exist",
         "working_tree_dirty",
-        "chapter_committed"
+        "chapter_committed",
+        "正文没了、但章纲还在",
+        "planning_preserved",
+        "planning_artifacts_present",
+        "pre-ch{N}",
+        "backup --prewrite",
+        "target_kind"
       ],
       "forbidden_patterns": [
         "git reset --hard",
@@ -155,7 +161,9 @@
         "write-gate --chapter {chapter_num} --stage prewrite",
         "write-gate --chapter {chapter_num} --stage precommit",
         "write-gate --chapter {chapter_num} --stage postcommit",
-        "projections retry --chapter {chapter_num}"
+        "projections retry --chapter {chapter_num}",
+        "backup --prewrite",
+        "pre-ch{NNNN}"
       ],
       "ordered": [
         [

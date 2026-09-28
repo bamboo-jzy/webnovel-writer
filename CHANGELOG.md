@@ -2,6 +2,29 @@
 
 这里记录每个正式版本对作者和维护者的影响。发布说明优先面向中文网文作者：先说写作体验有什么变化，再补维护者关心的技术细节。
 
+## v6.6.3 - 弃稿回退精确到「正文还没写」那一刻
+
+发版范围：`v6.6.2..v6.6.3`。
+
+### 给作者看的变化
+
+- **抛弃正文后，章纲一定还在**。以前 `/webnovel-chapter-discard` 回退到 `ch{N-1}`，那一刻通常还没有本章章纲（章纲写于本章规划期，晚于 `ch{N-1}`），结果抛弃正文会连章纲一起带走——`SKILL.md` 写着「章纲保留」但实现做不到。现在回退先把本章章纲与章级合同取出、回退后写回并纳入「抛弃」提交：独立章纲 `大纲/第N章-*.md`、章纲落在卷级详细大纲时的 `大纲/第N卷-详细大纲.md`（`legacy_volume`），以及 `.story-system/chapters/chapter_00N.json` 与 `.story-system/reviews/chapter_00N.review.json`。**回退终点固定是「正文没了、但章纲还在」**，抛弃后可直接 `/webnovel-chapter-revise N` 改章纲重写。
+- **新增写前点 `backup --prewrite`**。`/webnovel-write` 在正文落笔前（Step 1 之前）打 tag `pre-ch{NNNN}`；此后 `chapter-discard` 的回退目标按 **写前点 → `ch{N-1}` → 初始提交** 依次选取。命中写前点时，工作树精确回到「本章正文一行都没写」——章纲在、章级合同在、**写这一章期间顺手改的设定集与大纲也都在**（以前回退到 `ch{N-1}` 会一并丢掉）。
+- **打点失败不阻断写作**：返回非 0 时如实记进过程提示、继续写；缺写前点只是退回 `ch{N-1}` 并走章纲写回兜底。写前点与版本点分属两个命名空间（`pre-chNNNN` 不参与 `verified_backup`、不计入版本点统计、不写 `backup_receipts.json`），`backup --list` 单列一段。
+- 一处取舍：写前点的语义是「撤销写这一章期间的一切」，`chapter-discard` 的作用粒度是**「一个写作动作」**，不是「这一章的文件」。
+
+### 是否需要改旧项目
+
+不需要，也不强制。老项目没有 `pre-chNNNN`，`chapter-discard` 会自动退回 `ch{N-1}` 并走章纲写回兜底，行为与升级前的**预期**一致——只是现在章纲真的会被保住。想用上写前点，下次 `/webnovel-write` 正常打点即可；手工写作或从中间章开始的项目不补也能跑。
+
+### 给维护者
+
+- `scripts/backup_manager.py`：新增 `prewrite_point_tag()` / `prewrite_point()` / `prewrite_point_commit()`；把 `backup()` 中「解析 HEAD → 落 tag（含前移归档）」抽成 `_snapshot_commit()` 与 `_place_point_tag()` 共用，`backup()` 对外行为不变。命名 `pre-ch` + `^pre-ch(\d{4})$`：既不匹配 `^ch(\d{4})$` 也不匹配 `git tag -l "ch*"`，`verified_backup` / 版本点统计 / 历史点解析零污染。CLI 加 `--prewrite` 开关。
+- `scripts/data_modules/chapter_discard.py`：`_plan_rollback` target 顺序改为 **写前点 → `ch{N-1}` → 初始提交**，报告加 `target_kind` / `prewrite_point_tag` / `prewrite_point_exists`；新增 `planned_artifact_paths()` 覆盖 `split` 与 `legacy_volume` 两种章纲落盘 + 章级合同与审查记录；`rollback_chapter` 改为「归档 → 取产物 → `read-tree` → 核对（写回前）→ 写回并提交」，写前点模式下用 `--allow-empty` 保证留下抛弃提交；新增阻断 `version_point_not_ancestor`。
+- `tree_matches_target` 语义变为「写回产物**之前**」核对（新提交 = 版本点 + 保留产物，不再逐字等于 target），测试辅助 `_assert_worktree_restored` 判据同步改为 **blob 级**；`planning_preserved` / `planning_artifacts_present` / `missing_after_rollback` 三者纳入 `ok`，章纲写回失败不再以 `ok=true` 掩盖。
+- 测试：`test_chapter_discard.py` **23 → 36**、`test_backup_manager.py` **12 → 18**，全量 **1066 → 1084 passed**；`fast.json` 的 `skill_chapter_discard_contract` / `skill_webnovel_write_contract` 各增补写前点与章纲保留口径。
+- 文档同步 `skills/webnovel-write/SKILL.md`（新增「准备：为本章打写前点」）、`skills/webnovel-chapter-discard/SKILL.md`、`docs/guides/commands.md`、`docs/operations/operations.md`、`README.md`。skill 数仍 17，reference 覆盖度仍 17/17，未新增 CLI 子命令。
+
 ## v6.6.2 - 非末章正文不可改，现在是硬约束
 
 发版范围：`v6.6.1..v6.6.2`。

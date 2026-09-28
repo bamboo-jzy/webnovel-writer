@@ -147,7 +147,7 @@ python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" --project-root "${PRO
 
 抛弃一章正文。只允许处理**最后一章**；中间章会让后续章失去前置章，会被 `downstream_chapters_exist` 阻断。
 
-系统先按章的状态分类：没有 accepted commit 的走草稿删除（正文、本章临时 artifacts、审查报告先归档到 `.webnovel/discarded/`，再删文件并清理章级 state，`大纲/第N章-*.md` 章纲保留）；已 accepted 的走**原地版本点回退**：正文与本章 commit 先归档，再把工作树与索引恢复成第 N-1 章完成时的内容，最后在当前分支追加一次提交。**两条路都不新建分支**，回退也不删除任何提交、不移动版本点 tag——被抛弃的提交会成为新提交的父提交，仍留在分支历史里。
+系统先按章的状态分类：没有 accepted commit 的走草稿删除（正文、本章临时 artifacts、审查报告先归档到 `.webnovel/discarded/`，再删文件并清理章级 state，章纲保留）；已 accepted 的走**原地回退**：正文与本章 commit 先归档，再把工作树与索引恢复成**回退目标**的内容（优先写前点 `pre-ch{N}` = 「本章正文还没开始写」；没有写前点时才退回 `ch{N-1}`，并把第 N 章的章纲与章级合同写回——`ch{N-1}` 里通常没有这些文件，不写回就会跟着正文一起消失），最后在当前分支追加一次抛弃提交。**回退的终点固定是「正文没了、但章纲还在」**，两种章纲落盘都算：独立章纲 `大纲/第N章-*.md`，以及章纲落在卷级详细大纲（`legacy_volume`）时的那份 `大纲/第N卷-详细大纲.md`。报告里 `planning_artifacts_present=false` 表示校验没过，必须停下手工确认。**两条路都不新建分支**，回退也不删除任何提交、不移动版本点 tag——被抛弃的提交会成为新提交的父提交，仍留在分支历史里。
 
 ```bash
 /webnovel-chapter-discard 12
@@ -164,7 +164,7 @@ python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" \
   --project-root "${PROJECT_ROOT}" chapter-discard --chapter 12 --rollback --format json
 ```
 
-`chNNNN` 的语义是「第 N 章**完成后**」，所以抛弃第 N 章要回退 `ch{N-1}`，不是 `chN`。第 1 章没有 `ch0000`，回退目标是仓库初始提交。回退要求工作树干净，`working_tree_dirty` 会阻断；回退后 `tree_matches_target`、`chapter_body_absent`、`current_chapter_after` 三项核对不过会返回 `ok=false`。
+`chNNNN` 的语义是「第 N 章**完成后**」，所以 `ch{N-1}` 是「上一章完成后」，**不是**抛弃第 N 章时要的时点：本章章纲、章级合同、以及规划本章期间顺手改的设定集/大纲都不在它里面。**回退目标优先取写前点 `pre-ch{N}`**（`/webnovel-write` 在正文落笔前打，见 `backup --prewrite`），那才是「本章正文还没开始写」；只有没有写前点的旧项目才退回 `ch{N-1}`，并靠规划产物写回兜底。第 1 章没有 `ch0000`，无写前点时回退目标是仓库初始提交。回退要求工作树干净，`working_tree_dirty` 会阻断；回退后 `target_kind`、`tree_matches_target`、`chapter_body_absent`、`planning_artifacts_present`、`current_chapter_after` 核对不过会返回 `ok=false`。
 
 ### `/webnovel-write [章号]`（`context-agent` 先 research 并生成写作任务书 → 按任务书起草正文 → 审查 → 润色 → 数据落盘）。
 
@@ -251,7 +251,8 @@ git switch main                             # 放弃这条线就切回原分支
 - 用 `git switch -c <分支> <tag>`，不要用 `git checkout <tag> -- 正文 大纲 设定集 .story-system`：后者在任一目录不存在时整体报错、什么都不恢复，也不会删除回退点之后新增的文件
 - 动手前 `git status --short` 必须为空，否则 `git switch` 拒绝执行
 - 重写已存在的章号时，`backup` 会把 `chNNNN` 前移到新提交，被前移的旧版本点自动保留为 `chNNNN-prev-<时间戳>`（如 `ch0031-prev-20260917T105258`）——历史提交不丢，也不必手工删 tag；要回到某个旧版本点用 `git switch -c <分支> chNNNN-prev-<时间戳>`
-- `backup --list` 会分两段显示：章节当前版本点 `chNNNN`，以及它下面缩进的 `↳ 历史点`
+- `backup --list` 会分两段显示：章节当前版本点 `chNNNN`，以及它下面缩进的 `↳ 历史点`；写前点 `pre-chNNNN` 另起一段单列（它们不是版本点）
+- `backup --prewrite --chapter N` 打**写前点** tag `pre-chNNNN`（`/webnovel-write` 在 Step 1 之前自动执行）。它与版本点 `chNNNN` 分属两个命名空间：不写 `backup_receipts.json`、不参与 `verified_backup`、不影响版本点统计。用途只有一个：让 `chapter-discard --rollback` 精确回到「本章正文还没开始写」的那一刻。Git 不可用时跳过（返回 0，不阻断写作）
 - 切回旧章后重新跑一次 `/webnovel-doctor`，确认 Story System 与 projection 一致再续写
 - 查点与开分支仍走插件：`backup --list`、`backup --diff 20 40`、`backup --create-branch 50 --branch-name <name>`
 - Git 不可用时 `backup` 生成 `.webnovel/backups/snapshot_chNNNN_*` 离线副本（只保留最近 10 份），没有恢复子命令，需手工复制文件

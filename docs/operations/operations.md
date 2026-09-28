@@ -317,6 +317,8 @@ Git 和本地备份成功后统一写入 `.webnovel/backup_receipts.json`（`bac
 
 receipt 是本地可重建的运行证据，不作为故事事实、不递归打包进自身备份。回退后仍重新验证当前内容；不要用旧 receipt 替代正文或 commit 的核对。
 
+**写前点（`backup --prewrite --chapter N`）** 是版本点之外的第二种 tag：`pre-chNNNN`，由 `/webnovel-write` 在 Step 1 之前自动打，代表"本章正文还没开始写"。它与 `chNNNN` 分属两个命名空间——不写 receipt、不参与 `verified_backup` 与版本点统计，`backup --list` 单列一段；同章重写时再打一次会前移，旧点归档为 `pre-chNNNN-prev-<时间戳>`；Git 不可用时跳过（返回 0，不阻断写作）。用途只有一个：让 `chapter-discard --rollback` 优先回退到"本章正文还没落笔"的那一刻。
+
 ### 恢复到历史版本
 
 恢复使用 Git 原生命令，插件只负责建立版本点，不再提供恢复子命令：
@@ -334,6 +336,7 @@ git switch -c rewrite-from-ch0030 ch0030    # 工作树整体回到 ch0030 状�
 - 动手前 `git status --short` 必须为空；有未提交改动时 `git switch` 会拒绝执行，先提交或撤销
 - 回退点之后仍存在 `chNNNN` tag，但 `chNNNN` 的语义是"该章最新已备份状态"，不是不可变历史点。重写同一章号时 `backup` 先归档旧点（`chNNNN-prev-<时间戳>`）再把 tag 前移到新提交，因此不会失败、也不需要手工删除 tag；要取回某个被前移的状态用 `git switch -c <分支> chNNNN-prev-<时间戳>`
 - `chNNNN-prev-<时间戳>` 只增不改，是真正不可变的历史点；`backup --list` 把它们列在对应章节版本点下方
+- `pre-chNNNN` 是写前点、不是版本点：不被 `chNNNN` 的判定链消费，也不进 `backup_receipts.json`；它只服务 `chapter-discard` 的回退目标选择
 - 回退后重新运行 doctor 的 Story System / projection health 检查；正文与 `.webnovel/state.json` 不一致时不得继续续写
 
 ### 抛弃刚写完的一章
@@ -343,7 +346,7 @@ git switch -c rewrite-from-ch0030 ch0030    # 工作树整体回到 ch0030 状�
 | 章的状态 | 路径 | 结果 |
 |---|---|---|
 | 尚未 accepted（只有正文、草稿项或 rejected commit） | `--draft` | 正文、本章 artifacts、审查报告先整批归档到 `.webnovel/discarded/chapter_NNN_<时间戳>/`（保持项目内相对路径，可原样复制回去），再删除；`state.json` 的章级条目清理并重算 `current_chapter` / `total_words`；`大纲/` 不动 |
-| 已 accepted | `--rollback` | 原地版本点回退：正文与本章 commit 先归档，再把工作树与索引恢复成第 N-1 章完成时的内容，并在**当前分支**追加一次抛弃提交；不新建分支、不删除任何提交 |
+| 已 accepted | `--rollback` | 原地回退：正文与本章 commit 先归档，再把工作树与索引恢复成**回退目标**的内容（优先写前点 `pre-ch{N}`，无写前点才退回 `ch{N-1}`），并在**当前分支**追加一次抛弃提交；不新建分支、不删除任何提交 |
 
 ```bash
 python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" --project-root "${PROJECT_ROOT}" \
@@ -391,21 +394,22 @@ python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" --project-root "${PRO
 
 章-正节点还有代码级末端约束（**硬约束，三处入口同时阻断**）：`chapter-reload` 的重载与裁决入口、`chapter-commit` 的写入入口（`ChapterCommitService.persist_commit`；内容未变的重提交按 identity 相同直接返回，不算改写）、以及 `write-gate --stage precommit` 前置门——目标章不是最后一章时一律以 `handoff_target_locked` 阻断，`--backup-only` 豁免；尚无正文的章属首次写作，不受该边界约束。`--allow-fact-revision` 也不能绕过该边界。定向透视可跑 `handoff --node chapter_to_body`（不给 `--target`）看当前可改单元与既定事实清单。
 
-`chNNNN` 的语义是"第 N 章**完成后**已备份的状态"（`backup --chapter N` 在 `/webnovel-write` Step 6 执行），所以抛弃第 N 章要回到 `ch{N-1}`。回到 `chNNNN` 只会把这一章原样留着——这是最容易踩的一步。
+`chNNNN` 的语义是"第 N 章**完成后**已备份的状态"（`backup --chapter N` 在 `/webnovel-write` Step 6 执行），所以 `ch{N-1}` 是"上一章完成后"、并不是抛弃第 N 章的终点。回到 `chNNNN` 只会把这一章原样留着——这是最容易踩的一步。**回退目标优先取写前点 `pre-ch{N}`**（`backup --prewrite --chapter N`，在 `/webnovel-write` Step 1 之前自动打）：它对应"本章正文还没开始写"，本章章纲、章级合同、以及规划本章期间顺手改的设定集/大纲都在里面；没有写前点的旧项目（或手工写作）才退回 `ch{N-1}`，并靠规划产物写回兜底。回退报告里的 `target_kind` 说明本次用的是哪一种（`prewrite_point` / `version_point` / `initial_commit`）。
 
-原地回退之后工作树逐项回到第 N-1 章完成时：
+原地回退之后工作树逐项回到回退目标（有写前点时＝第 N 章正文还没开始写的那一刻；否则＝第 N-1 章完成时）：
 
 | 内容 | 结果 |
 |---|---|
 | `正文/第N章*.md` | 删除 |
 | `.story-system/commits/chapter_00N.commit.json` | 删除 |
-| `.webnovel/state.json`（含 `chapter_revisions`） | 回到第 N-1 章 |
-| `.webnovel/index.db`（chapters / scenes / appearances / state_changes / relationships） | 回到第 N-1 章 |
-| `.webnovel/summaries/`、`projection_log.jsonl` | 回到第 N-1 章 |
+| `.webnovel/state.json`（含 `chapter_revisions`） | 回到回退目标 |
+| `.webnovel/index.db`（chapters / scenes / appearances / state_changes / relationships） | 回到回退目标 |
+| `.webnovel/summaries/`、`projection_log.jsonl` | 回到回退目标 |
 | 被抛弃的提交、`chNNNN` tag、当前分支 | **全部保留**：提交仍是新提交的父提交，分支名不变 |
+| 第 N 章的规划产物：章纲 + `.story-system/chapters/chapter_00N.json` + `.story-system/reviews/chapter_00N.review.json` | 写前点目标 → **本来就在里面**（`planning_preserved` 为空）；`ch{N-1}` 目标 → **写回**：回退前取出、回退后写回并纳入本次提交（`ch{N-1}` 里通常没有它们）。章纲两种落盘都算：独立章纲 `大纲/第N章*.md`，或章纲落在卷级详细大纲时的那份 `大纲/第N卷-详细大纲.md` |
 | `.webnovel/discarded/chapter_NNN_<时间戳>/` | 新增归档副本（未跟踪，不随回退消失） |
 
-`大纲/`、`设定集/` 也在版本点内：如果写这一章时顺手改过章纲，那些改动同样会被撤掉。想看这次回退究竟丢掉了什么：
+`大纲/`、`设定集/` 整体在版本点内，但**第 N 章自己的章纲与章级合同是例外**：写前点目标下它们与当时内容一致，`ch{N-1}` 目标下会在回退后写回。**回退的终点固定是「正文没了、但章纲还在」**——所以抛弃之后章纲还在、可以直接改，不必从零重建。写这一章时顺手改过的**其它章**的大纲/设定集内容会随回退撤掉（写前点的语义是"撤销写这一章期间的一切"，不只这一章的正文）。报告字段 `planning_artifacts_present` 为 `false`（或 `missing_after_rollback` 非空）说明这条没达成，此时 `ok=false`，先 `git status` 手工确认。想看这次回退究竟丢掉了什么：
 
 ```bash
 git diff --stat HEAD ch0010              # 被抛弃的改动清单

@@ -1,7 +1,7 @@
 # Webnovel Writer
 
 [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-6.6.2-brightgreen.svg)](.claude-plugin/marketplace.json)
+[![Version](https://img.shields.io/badge/version-6.6.3-brightgreen.svg)](.claude-plugin/marketplace.json)
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-Compatible-purple.svg)](https://claude.ai/claude-code)
 [![Marketplace](https://img.shields.io/badge/Claude%20Code-Marketplace-black.svg)](.claude-plugin/marketplace.json)
@@ -253,7 +253,7 @@ git diff --stat HEAD^ ch0010                 # 看清这次到底丢掉了什么
 git show ch0010:"正文/第10章-*.md"            # 后悔了随时取回
 ```
 
-第 10 章的正文、commit、索引行、state 与摘要一起消失，下一章直接从第 10 号重新写；分支名不变，被抛弃的提交和 `ch0010` tag 仍在仓库里（另有一份归档副本在 `.webnovel/discarded/`）。写这一章时顺手改过的章纲也会一起撤掉。完整清单见 `docs/operations/operations.md` 的「抛弃刚写完的一章」。
+第 10 章的正文、commit、索引行、state 与摘要一起消失，下一章直接从第 10 号重新写；分支名不变，被抛弃的提交和 `ch0010` tag 仍在仓库里（另有一份归档副本在 `.webnovel/discarded/`）。**回退终点固定是「正文没了、但章纲还在」**：第 10 章自己的章纲与章级合同会写回（`ch0009` 里通常没有它们，不写回就会跟着正文一起消失），所以抛弃后章纲还在、可以直接改；写这一章时顺手改过的其它章的大纲内容仍会随版本点撤掉。完整清单见 `docs/operations/operations.md` 的「抛弃刚写完的一章」。
 
 Git 不可用时 `backup` 退化为本地 `snapshot_chNNNN_*` 副本（带文件大小与 SHA-256 manifest，只保留最近 10 份），那是离线副本，恢复需要手工复制文件。
 
@@ -414,7 +414,8 @@ git push origin feature/your-feature
 
 | 版本 | 主要变化 |
 |------|----------|
-| **v6.6.2 (当前)** | 非末章正文不可改做成硬约束：chapter-reload / chapter-commit / write-gate precommit 三处同时阻断 |
+| **v6.6.3 (当前)** | 弃稿回退保留章纲并新增写前点：chapter-discard 精确回到「正文还没写」那一刻 |
+| **v6.6.2** | 非末章正文不可改做成硬约束：chapter-reload / chapter-commit / write-gate precommit 三处同时阻断 |
 | **v6.6.1** | 改了哪一层，系统就帮你检查哪几层（四层方向透传）；非最后一章正文不再可改稿 |
 | **v6.6.0** | 卷纲、章纲先和你讨论再生成，抛弃章节不再新建分支 |
 | **v6.5.0** | 最低 Python 版本提升到 3.12 |

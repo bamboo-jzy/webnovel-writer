@@ -170,6 +170,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" han
 ## 八、失败与恢复
 
 - `handoff_target_locked`：目标单位不在可改单元内。按提示改走可改单元，或先上溯处理既定事实。章-正节点会在 `chapter-reload`、`chapter-commit`、`write-gate --stage precommit` 三处同时报出，不要逐个入口试探。
+- 章-正节点要改已有正文章时，唯一通道是 `/webnovel-chapter-discard {N}` 回退最后一章（`chapter_committed` 不在写前允许的 phase 里，不能原地重跑）。回退会把该章的章纲与章级合同写回，所以改完章纲可以直接续写，不必从零重建。
 - `handoff_confirmation_required`：`input_token` 不匹配。重新 `--dry-run` 预览并让作者确认新的 token。
 - 候选偏离为空但须裁决项非空：**不等于方向一致**，仍要与作者逐项确认散文层。
 - 裁决记录只增不改；需要推翻旧裁决时，重新预览并记录一条新裁决。

@@ -946,6 +946,22 @@ def test_write_skill_describes_discard_as_in_place_rollback():
         assert forbidden not in text, f"webnovel-write: 弃稿段仍在教新建分支 {forbidden}"
 
 
+def test_chapter_discard_rollback_target_is_body_gone_outline_kept():
+    """回退终点必须是「正文没了、但章纲还在」，且两种章纲落盘都算。
+
+    章纲多是「第 N-1 章完成后」才规划的，整树还原本会把它带走。只写在文档里不够——
+    代码必须把它纳入回退后核对（`planning_artifacts_present`），否则章纲被删时
+    报告仍以 `ok=true` 掩盖。
+    """
+    skill = _read_text(SKILLS_DIR / "webnovel-chapter-discard" / "SKILL.md")
+    for required in ("正文没了、但章纲还在", "planning_artifacts_present", "legacy_volume"):
+        assert required in skill, f"webnovel-chapter-discard: 缺少回退终点约定 {required}"
+
+    source = _read_text(SCRIPTS_DIR / "data_modules" / "chapter_discard.py")
+    for required in ("planning_artifacts_present", "missing_after_rollback", '"legacy_volume"'):
+        assert required in source, f"chapter_discard: 回退终点未在代码里核对 {required}"
+
+
 # ---------------------------------------------------------------------------
 # 8. B 类跨层新契约（plan §5.2-B / §4.5 写入所有权矩阵）
 #    tools↔落盘一致性现状已满足 → 作通过型守护；

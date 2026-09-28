@@ -2,6 +2,30 @@
 
 这里记录每个正式版本对作者和维护者的影响。发布说明优先面向中文网文作者：先说写作体验有什么变化，再补维护者关心的技术细节。
 
+## v6.6.2 - 非末章正文不可改，现在是硬约束
+
+发版范围：`v6.6.1..v6.6.2`。
+
+### 给作者看的变化
+
+- **非最后一章的正文，任何入口都改不动了**。`v6.6.1` 只在 `/webnovel-chapter-reload` 上阻断，等于留了侧门；本次补齐另外两个入口，三处同时报 `handoff_target_locked`：`chapter-reload`（重载与 `--reconcile`）、`chapter-commit`（提交写入层）、`write-gate --stage precommit`（提交前的前置门，让失败发生在写盘之前）。
+- **内容没变的重提交不算改写，照旧放行**（按 commit identity 相同直接返回），重跑/补跑投影不受影响。
+- **`--allow-fact-revision` 也绕不过去**——它改写历史事实的能力现在只剩最后一章可用。`--backup-only` 照旧豁免（只备份不改状态），尚无正文的章属首次写作不受影响。
+- 想改旧章唯一通道不变：从那一章起整条尾巴按章序回退重写（`/webnovel-chapter-discard` 逐章回退后补写），错别字级别的小修同样走这条路。
+
+### 是否需要改旧项目
+
+不需要。判定只依赖「已有正文或 commit 的章里最大章号是谁」，不新增状态字段。若此前有中间章被手工改过正文却没重载，升级不会凭空报错，但下一次对该章 `chapter-commit` / `write-gate --stage precommit` 会被拦下。
+
+### 给维护者
+
+- `chapter_commit_service.py`：`persist_commit` 在「`commit_identity` 相同」的早返回**之后**插入 `body_edit_boundary` 检查。位置不能提前：`apply_projection_writers` 会在投影后二次调用 `persist_commit`，`projections retry/replay` 也走同一条路，这些调用 identity 相同必须放行；`commit_identity` 本就排除 `projection_status`，纯投影状态变化不会误触发。
+- `write_gates/precommit.py`：`run_precommit_gate` 新增 `handoff_target_locked` 错误项，`details` 带 `last_chapter` / `locked_chapters`。
+- 测试：`test_direction_handoff.py` 24 → 28（含「最后一章放行到既有 `chapter_artifacts_stale`」的反向断言，证明没误伤正常提交）；`test_prompt_integrity.py` 162 → 163；`fast.json` 的 `skill_chapter_reload_contract` 增补三项。
+- 文档同步 `references/handoff/direction-handoff.md`、两个 SKILL.md、`README.md`、`docs/architecture/overview.md`、`docs/guides/commands.md`、`docs/operations/operations.md`。skill 数仍 17，未新增 CLI 子命令。
+
+注意一处**刻意收紧**：`chapter-commit` 现在会拒绝非最后一章的改写，错误码与 reload 相同（`handoff_target_locked`），不要逐个入口试探。
+
 ## v6.6.1 - 改了哪一层，系统就帮你检查哪几层
 
 发版范围：`v6.6.0..v6.6.1`。

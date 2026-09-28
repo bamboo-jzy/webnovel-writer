@@ -41,8 +41,13 @@
 **章-正**（`chapter_to_body`）
 - 正文本修改时（人工修改后 `/webnovel-chapter-reload`），必须与章纲对齐。
 - 只允许改最后一章的正文。
+- **硬约束（代码级，不接受提示词绕过）**：非最后一章的正文与事实不得改写。三个入口同时阻断，报 `handoff_target_locked`：
+  1. `chapter-reload` 的重载与对账入口（`reload_chapter_body` / `reconcile_chapter_body`）；`--backup-only` 豁免（只备份，不改状态）。
+  2. `chapter-commit` 写入入口（`ChapterCommitService.persist_commit`）——内容未变的重提交按 commit identity 相同直接返回，不算改写；一旦 commit 内容变化即阻断，`--allow-fact-revision` 也不能绕过。
+  3. `write-gate --stage precommit` 前置门，在提交前就报出该阻断，避免走到写盘才失败。
 - 一致时章纲不变；不一致时与作者讨论，由作者决定是否修改章纲。
 - **若章纲被修改，必须上溯到卷-章节点**再走一遍。
+- 直接改文件绕过 CLI 不在阻断范围内，但会让正文 revision 与登记值不一致，后续重载、`--validate`、precommit 门与提交都会报错。
 
 ## 三、统一裁决口径
 
@@ -164,7 +169,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" han
 
 ## 八、失败与恢复
 
-- `handoff_target_locked`：目标单位不在可改单元内。按提示改走可改单元，或先上溯处理既定事实。
+- `handoff_target_locked`：目标单位不在可改单元内。按提示改走可改单元，或先上溯处理既定事实。章-正节点会在 `chapter-reload`、`chapter-commit`、`write-gate --stage precommit` 三处同时报出，不要逐个入口试探。
 - `handoff_confirmation_required`：`input_token` 不匹配。重新 `--dry-run` 预览并让作者确认新的 token。
 - 候选偏离为空但须裁决项非空：**不等于方向一致**，仍要与作者逐项确认散文层。
 - 裁决记录只增不改；需要推翻旧裁决时，重新预览并记录一条新裁决。

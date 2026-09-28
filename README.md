@@ -1,7 +1,7 @@
 # Webnovel Writer
 
 [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-6.6.1-brightgreen.svg)](.claude-plugin/marketplace.json)
+[![Version](https://img.shields.io/badge/version-6.6.2-brightgreen.svg)](.claude-plugin/marketplace.json)
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-Compatible-purple.svg)](https://claude.ai/claude-code)
 [![Marketplace](https://img.shields.io/badge/Claude%20Code-Marketplace-black.svg)](.claude-plugin/marketplace.json)
@@ -94,6 +94,8 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" han
 ```
 
 机器只给「锚点差集」作候选清单（总纲与卷纲是散文，无法机器判定方向）；是否真的不一致由你裁决。
+
+章-正这一层是**硬约束**：非最后一章的正文与事实不得改写，`chapter-reload`（重载与对账）、`chapter-commit`（写入，内容未变的重提交放行）、`write-gate --stage precommit`（前置门）三处同时报 `handoff_target_locked`，`--allow-fact-revision` 也无法绕过。要改只能从那一章起整条尾巴按章序回退重写。
 
 ## 系统长什么样
 
@@ -412,7 +414,8 @@ git push origin feature/your-feature
 
 | 版本 | 主要变化 |
 |------|----------|
-| **v6.6.1 (当前)** | 改了哪一层，系统就帮你检查哪几层（四层方向透传）；非最后一章正文不再可改稿 |
+| **v6.6.2 (当前)** | 非末章正文不可改做成硬约束：chapter-reload / chapter-commit / write-gate precommit 三处同时阻断 |
+| **v6.6.1** | 改了哪一层，系统就帮你检查哪几层（四层方向透传）；非最后一章正文不再可改稿 |
 | **v6.6.0** | 卷纲、章纲先和你讨论再生成，抛弃章节不再新建分支 |
 | **v6.5.0** | 最低 Python 版本提升到 3.12 |
 | **v6.4.0** | 一章不要了，直接抛弃 |

@@ -12,6 +12,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def _ensure_scripts_on_path() -> None:
     scripts_dir = Path(__file__).resolve().parents[2]
@@ -21,6 +23,7 @@ def _ensure_scripts_on_path() -> None:
 
 _ensure_scripts_on_path()
 
+from data_modules.chapter_commit_service import ChapterCommitService  # noqa: E402
 from data_modules.chapter_reloading import reload_chapter_body  # noqa: E402
 from data_modules.direction_handoff import (  # noqa: E402
     HANDOFF_DECISIONS,
@@ -32,6 +35,7 @@ from data_modules.direction_handoff import (  # noqa: E402
     normalize_decision,
     record_handoff,
 )
+from data_modules.write_gates.precommit import run_precommit_gate  # noqa: E402
 
 MASTER_OUTLINE = """# 总纲
 
@@ -391,3 +395,49 @@ def test_format_handoff_report_prints_error(tmp_path):
 
     assert "ERROR" in text
     assert "未知方向透传节点" in text
+
+
+# ---------------------------------------------------------------------------
+# 硬约束的三个入口：reload / commit / write-gate precommit
+# ---------------------------------------------------------------------------
+
+def test_persist_commit_blocked_for_locked_chapter(tmp_path):
+    """提交层硬约束：非最后一章的 commit 内容不得改写。"""
+    _build_project(tmp_path, chapters=(1, 2), bodies=(1, 2))
+
+    service = ChapterCommitService(tmp_path)
+    payload = {"meta": {"chapter": 1, "status": "accepted"}, "provenance": {}}
+
+    with pytest.raises(ValueError, match="handoff_target_locked"):
+        service.persist_commit(payload)
+
+
+def test_persist_commit_passes_boundary_for_last_chapter(tmp_path):
+    """最后一章不受该边界约束（放行到后续既有的 artifact 校验）。"""
+    _build_project(tmp_path, chapters=(1, 2), bodies=(1, 2))
+
+    service = ChapterCommitService(tmp_path)
+    payload = {"meta": {"chapter": 2, "status": "accepted"}, "provenance": {}}
+
+    with pytest.raises(ValueError, match="chapter_artifacts_stale"):
+        service.persist_commit(payload)
+
+
+def test_precommit_gate_reports_locked_chapter(tmp_path):
+    """写门前置：非最后一章在 precommit 阶段就报 handoff_target_locked。"""
+    _build_project(tmp_path, chapters=(1, 2), bodies=(1, 2))
+
+    report = run_precommit_gate(tmp_path, 1)
+    codes = [item["code"] for item in report["errors"]]
+
+    assert "handoff_target_locked" in codes
+
+
+def test_precommit_gate_does_not_flag_last_chapter(tmp_path):
+    """最后一章不该被这条边界误报。"""
+    _build_project(tmp_path, chapters=(1, 2), bodies=(1, 2))
+
+    report = run_precommit_gate(tmp_path, 2)
+    codes = [item["code"] for item in report["errors"]]
+
+    assert "handoff_target_locked" not in codes

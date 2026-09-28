@@ -166,6 +166,15 @@ class ChapterCommitService:
                 self._assert_projection_current(payload)
                 atomic_write_json(path, payload, use_lock=False)
                 return path
+            # 硬约束（方向透传「章-正」节点）：非最后一章的正文与事实不得改写。
+            # 内容未变的重提交已在上方按 identity 相同返回，因此不被阻断；
+            # 一旦落到这里就说明本章 commit 内容发生了变化，属于改写既定事实。
+            from .direction_handoff import body_edit_boundary
+
+            boundary = body_edit_boundary(self.project_root, chapter)
+            if not boundary["allowed"]:
+                blocker = boundary["blocker"]
+                raise ValueError(f"{blocker['code']}: {blocker['message']} {blocker['manual_channel']}")
             artifacts = {key: payload.get(key, {}) for key in ARTIFACT_FILES}
             payload.setdefault("provenance", {})
             state = read_object(self.project_root / ".webnovel/state.json", optional=True)

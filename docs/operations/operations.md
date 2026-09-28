@@ -389,7 +389,7 @@ python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" --project-root "${PRO
 
 与 `.story-system/reconciliations/` 的分工：`reconciliations` 是**章内**履约对账（哪个 CBN/CPN 节点没写到位），由 `chapter-reload --reconcile` 写入；`handoffs` 是**层间**方向裁决（章纲与正文整体是否同向，或卷纲与总纲、章纲与卷纲）。两者互补，不互相替代。
 
-章-正节点还有代码级末端约束：`chapter-reload` 的重载与裁决入口在目标章不是最后一章时以 `handoff_target_locked` 阻断，`--backup-only` 豁免；尚无正文的章属首次写作，不受该边界约束。定向透视可跑 `handoff --node chapter_to_body`（不给 `--target`）看当前可改单元与既定事实清单。
+章-正节点还有代码级末端约束（**硬约束，三处入口同时阻断**）：`chapter-reload` 的重载与裁决入口、`chapter-commit` 的写入入口（`ChapterCommitService.persist_commit`；内容未变的重提交按 identity 相同直接返回，不算改写）、以及 `write-gate --stage precommit` 前置门——目标章不是最后一章时一律以 `handoff_target_locked` 阻断，`--backup-only` 豁免；尚无正文的章属首次写作，不受该边界约束。`--allow-fact-revision` 也不能绕过该边界。定向透视可跑 `handoff --node chapter_to_body`（不给 `--target`）看当前可改单元与既定事实清单。
 
 `chNNNN` 的语义是"第 N 章**完成后**已备份的状态"（`backup --chapter N` 在 `/webnovel-write` Step 6 执行），所以抛弃第 N 章要回到 `ch{N-1}`。回到 `chNNNN` 只会把这一章原样留着——这是最容易踩的一步。
 

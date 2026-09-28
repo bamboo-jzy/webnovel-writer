@@ -123,7 +123,7 @@ python -X utf8 "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py" \
 
 正文 revision 变化会将后续已有规划、合同或正文的依赖标为 `previous_chapter_revision_changed`；系统不会自动改写下游文件。若重新提取的事实与旧 accepted commit 不一致而投影链无法安全撤销旧事实，提交会以 `revision_projection_unsafe` 阻断，并保留旧提交和新校验结果。
 
-**方向透传约束**：只能修改**最后一章**正文（节点 `chapter_to_body`）。CLI 在重载与裁决入口都会检查章号边界，非最后一章报 `handoff_target_locked` 并说明该章正文是既定事实；`--backup-only` 不受此限制。履约对账（`--reconcile`）解决的是**章内**节点偏离，层间方向另由第 4B 步的 `handoff --node chapter_to_body --check --target {chapter_num}` 处理；裁决为「改章纲」时停止本命令，改走 `/webnovel-chapter-revise {chapter_num}` 并按方向透传规则上溯到卷-章节点。
+**方向透传约束**：只能修改**最后一章**正文（节点 `chapter_to_body`）。这是**硬约束**：`chapter-reload` 的重载与裁决入口、`chapter-commit` 的写入入口、`write-gate --stage precommit` 前置门三处同时阻断，非最后一章报 `handoff_target_locked` 并说明该章正文是既定事实；`--backup-only` 不受此限制。履约对账（`--reconcile`）解决的是**章内**节点偏离，层间方向另由第 4B 步的 `handoff --node chapter_to_body --check --target {chapter_num}` 处理；裁决为「改章纲」时停止本命令，改走 `/webnovel-chapter-revise {chapter_num}` 并按方向透传规则上溯到卷-章节点。
 
 履约对账未决时，`chapter-commit` 不会信任 artifact 自报的 `decision` 或 `confirmed_by`。先预览当前输入和偏离节点：
 
@@ -467,8 +467,8 @@ python -X utf8 "<CLAUDE_PLUGIN_ROOT>/scripts/webnovel.py" --project-root "<PROJE
 |--------|------|
 | `story-system "<题材>" --persist` | 写入合同种子（`MASTER_SETTING.json` 等） |
 | `story-system "<题材>" --emit-runtime-contracts --chapter N` | 生成运行时合同 + 写前校验 |
-| `chapter-commit --chapter N` | 提交章节 commit（可附带 review/fulfillment/disambiguation/extraction 结果） |
-| `chapter-commit --chapter N --expected-previous <identity> --allow-fact-revision --revision-reason "..."` | 作者确认后**改写已 accepted 的事实**：先撤回该章派生读模型再整章重建。不带 `--allow-fact-revision` 仍拒绝（`revision_projection_unsafe`） |
+| `chapter-commit --chapter N` | 提交章节 commit（可附带 review/fulfillment/disambiguation/extraction 结果）。**非最后一章的既有 commit 不得改写**：内容变化即报 `handoff_target_locked`（内容未变的重提交放行） |
+| `chapter-commit --chapter N --expected-previous <identity> --allow-fact-revision --revision-reason "..."` | 作者确认后**改写已 accepted 的事实**：先撤回该章派生读模型再整章重建。不带 `--allow-fact-revision` 仍拒绝（`revision_projection_unsafe`）；**只对最后一章有效**，非最后一章由方向透传的章-正硬约束提前阻断，`--allow-fact-revision` 无法绕过 |
 | `write-gate --chapter N --stage prewrite` | 写前检查项目阶段、Story System 合同和占位符 |
 | `write-gate --chapter N --stage precommit` | 提交前检查正文和四类 commit artifacts |
 | `write-gate --chapter N --stage postcommit` | 提交后检查 commit 与 projection 状态 |

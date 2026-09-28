@@ -79,6 +79,21 @@ def run_precommit_gate(project_root: Path, chapter: int) -> dict:
         )
 
     from ..chapter_reloading import assert_artifact_freshness, chapter_artifact_report
+    from ..direction_handoff import body_edit_boundary
+
+    boundary = body_edit_boundary(project_root, chapter)
+    if not boundary["allowed"]:
+        blocker = boundary["blocker"]
+        errors.append(
+            issue(
+                "handoff_target_locked",
+                message=str(blocker["message"]),
+                impact="非最后一章的正文是既定事实，提交会把它固化成不可追溯的新版本。",
+                repair=str(blocker["manual_channel"]),
+                details={"last_chapter": blocker["last_chapter"], "locked_chapters": blocker["locked_chapters"]},
+            )
+        )
+
     artifact_report = chapter_artifact_report(project_root, chapter)
     try:
         assert_artifact_freshness(project_root, chapter, artifact_report.get("payloads", {}), require_validated=True)

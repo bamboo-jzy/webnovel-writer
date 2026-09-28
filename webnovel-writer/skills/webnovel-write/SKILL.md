@@ -377,7 +377,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" use
 
 - **正文还是草稿（本章未 accepted）**：先用 `/webnovel-chapter-revise {chapter_num}` 改章纲并**刷新章级合同**——只改章纲不刷合同会让 phase 落到 `plan_in_progress`，prewrite gate 报 `chapter_contract_stale`——再跑本流程；`run-ledger write-resume` 会因章纲晚于正文给出 `outline_newer_than_draft` 确认项，选「重新起草」即重新生成正文（先备份、重新登记输入，不复用旧审查结果）。
 - **本章已 accepted**：**不能直接重跑**。`chapter_committed` 不在写前允许的 phase 里，prewrite gate 恒报 `phase_not_ready_for_prewrite`，与是否刷新合同无关；必须先用 `/webnovel-chapter-discard {chapter_num}` 把这章回退掉（**回退会整树还原，所以先回退、再改章纲**，否则章纲改动会被一起回退），然后改章纲、再写。
-- 本章后面还有已提交的章时，discard 会被 `downstream_chapters_exist` 阻断，`/webnovel-chapter-reload {chapter_num}` 也会被方向透传的「章-正」末端约束以 `handoff_target_locked` 阻断（只允许重载最后一章正文）。此时**没有「只改某一章正文」的入口**，唯一通道是从这一章起整条尾巴按章序回退重写，或走 `/webnovel-chapter-discard {chapter_num}` 再依次补写。不要试图绕过阻断：直接改写正文文件而不重载会让 revision 与正文不一致，后续校验与提交都会报错。
+- 本章后面还有已提交的章时，discard 会被 `downstream_chapters_exist` 阻断，`/webnovel-chapter-reload {chapter_num}` 也会被方向透传的「章-正」末端约束以 `handoff_target_locked` 阻断（只允许重载最后一章正文）。该约束是**硬约束**：`chapter-commit` 的写入入口与 `write-gate --stage precommit` 前置门同样会阻断非最后一章，`--allow-fact-revision` 也不能绕过。此时**没有「只改某一章正文」的入口**，唯一通道是从这一章起整条尾巴按章序回退重写，或走 `/webnovel-chapter-discard {chapter_num}` 再依次补写。不要试图绕过阻断：直接改写正文文件而不重载会让 revision 与正文不一致，后续校验与提交都会报错。
 
 ## 作者友好最终报告契约
 

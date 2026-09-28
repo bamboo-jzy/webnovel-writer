@@ -98,7 +98,7 @@
       "id": "skill_chapter_reload_contract",
       "type": "skill_contract",
       "skill": "webnovel-chapter-reload",
-      "description": "Manual body edits require revision-bound reload, validation, and explicit commit confirmation; only the last chapter body may be edited, enforced by the chapter-to-body direction boundary.",
+      "description": "Manual body edits require revision-bound reload, validation, and explicit commit confirmation; only the last chapter body may be edited, and that boundary is a hard constraint enforced at the reload, commit, and precommit-gate entries alike.",
       "required": [
         "chapter-reload",
         "--dry-run",
@@ -111,7 +111,10 @@
         "方向透传",
         "chapter_to_body",
         "只能修改最后一章正文",
-        "handoff_target_locked"
+        "handoff_target_locked",
+        "硬约束",
+        "chapter-commit",
+        "write-gate --stage precommit"
       ]
     },
     {

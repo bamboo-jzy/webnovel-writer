@@ -92,7 +92,7 @@
 
 关键实现取舍：**机器只给候选清单，不给硬判定**。总纲与卷纲是散文，无法做语义等价比对，因此 `check` 只输出「锚点差集」——总-卷节点比对总纲卷表的卷号与章节范围、写回 JSON 与卷表是否一致；卷-章节点比对章纲「关键实体」是否在上游出现、卷纲 revision 是否过期；章-正节点复用 `fulfillment_result` 的偏离项。散文层（卷名、核心冲突、卷末高潮）一律列为「须裁决项」，由作者确认。
 
-末端约束由代码强制：`chapter_to_body` 节点的边界落在 `body_edit_boundary()`，`chapter-reload` 的重载与裁决入口在目标章不是最后一章时以 `handoff_target_locked` 阻断（`--backup-only` 豁免）；尚无正文的章属于首次写作，不受该边界约束。
+末端约束由代码强制：`chapter_to_body` 节点的边界落在 `body_edit_boundary()`，**三处入口同时阻断**——`chapter-reload` 的重载与裁决入口、`chapter-commit` 的写入入口（`ChapterCommitService.persist_commit`；内容未变的重提交按 commit identity 相同直接返回，不算改写）、`write-gate --stage precommit` 前置门，目标章不是最后一章时以 `handoff_target_locked` 阻断（`--backup-only` 豁免），`--allow-fact-revision` 同样无法绕过；尚无正文的章属于首次写作，不受该边界约束。
 
 ### 统一 revision evidence
 

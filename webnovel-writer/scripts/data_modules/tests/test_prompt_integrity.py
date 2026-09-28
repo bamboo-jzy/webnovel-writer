@@ -1110,3 +1110,21 @@ def test_outline_revise_routes_non_final_volumes_as_locked():
 def test_handoff_cli_is_registered():
     """handoff 子命令必须登记在 CLI 白名单里，否则 skill 提示词会被判为引用未注册命令。"""
     assert "handoff" in REGISTERED_CLI_SUBCOMMANDS
+
+
+def test_chapter_reload_boundary_is_a_hard_constraint():
+    """章-正末端约束必须写成硬约束，并说明三处入口同时阻断。
+
+    只写在 `chapter-reload` 里会被理解成「换个入口就能绕过」——提交层与写前门
+    必须一并点明，作者才不会逐个入口试探。
+    """
+    text = _read_text(SKILLS_DIR / "webnovel-chapter-reload" / "SKILL.md")
+    for required in (
+        "硬约束",
+        "chapter-commit",
+        "write-gate --stage precommit",
+        "handoff_target_locked",
+        "--allow-fact-revision",
+        "只能修改最后一章正文",
+    ):
+        assert required in text, f"webnovel-chapter-reload: 缺少硬约束约定 {required}"
